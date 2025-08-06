@@ -1,0 +1,14 @@
+*.log
+*.json
+*.png
+*.lock
+*.toml
+*.zip
+*.python-version
+
+
+Logs/
+Scrennshots/
+YCB_Dataset/
+01_project/remove_screenshot.py
+main.py
