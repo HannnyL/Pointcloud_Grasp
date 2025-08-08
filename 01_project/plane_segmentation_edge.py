@@ -1061,7 +1061,7 @@ def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
         plt.show()
 
 
-highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
+# highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
 
 
 # Show Gripper Bounding Box
@@ -1459,6 +1459,21 @@ def multipolygon_to_segments(multipolygon):
 
 
 #*******************************
+
+def auto_img_scale(pcd,
+                   target_px=1000,          # 想让最长边落在~1000 px
+                   max_scale=1500,          # 不要比 1500 更大
+                   min_scale=200):           # 也别太小，避免过密
+    """
+    根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
+    """
+    dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
+    avg_d  = np.mean(dists)
+    scale = target_px * 0.0015/avg_d
+    return max(min(scale, max_scale), min_scale)
+
+
+
 def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
     if pcd.is_empty():
@@ -1474,7 +1489,7 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
 
     # 转换点为图像坐标
-    img_scale = 1500
+    img_scale = auto_img_scale(pcd)
     points_img = np.int32((points - points.min(axis=0)) * img_scale)
     img_size = points_img.max(axis=0) + 10
 
@@ -1505,7 +1520,9 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
 
     # ---- 将轮廓转换回原始坐标空间 ---- #
-    contour_points_list = []
+    contours_real   = []        # 每个轮廓在 2D 投影坐标系下
+    polygons_2d     = []        # shapely Polygon 列表
+    # contour_points_list = []
     linesets = []
 
     for cnt in contours:
@@ -1519,7 +1536,9 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
         # 从二维坐标映射回原始三维空间
         points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
 
-        contour_points_list.append(points_3d)
+        contours_real.append(points_2d_back)
+        polygons_2d.append(Polygon(points_2d_back))
+        # contour_points_list.append(points_3d)
 
         # 构造Open3D LineSet对象
         num_points = points_3d.shape[0]
@@ -1545,20 +1564,28 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
 
     # 轮廓转回真实二维坐标
-    contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
-    poly_contour = Polygon(contour_real)
+    # contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
+    # poly_contour = Polygon(contour_real)
 
     # 判断点是否在轮廓内
     test_point = (0.0, 0.02)
-    is_inside = poly_contour.contains(Point(test_point))
-    print(f"点{test_point}是否位于轮廓内：{is_inside}")
+    # is_inside = polygons_2d.contains(Point(test_point))
+    # print(f"点{test_point}是否位于轮廓内：{is_inside}")
+    is_inside = any(poly.contains(Point(test_point)) for poly in polygons_2d)
+    print(f"点 {test_point} 是否位于某个轮廓内：{is_inside}")
 
     # 计算相交面积（实际单位）
+    intersection_areas = []
     rect_real = np.array([[-0.05,-0.01], [0.05,-0.01], [0.05,-0.05], [-0.05,-0.05]])
     poly_rect = Polygon(rect_real)
 
-    intersection_area = poly_contour.intersection(poly_rect).area
-    print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
+    for idx, poly in enumerate(polygons_2d):
+        intersection = poly.intersection(poly_rect)
+        area = intersection.area
+        intersection_areas.append(area)
+    print(f"最大相交面积：{max(intersection_areas)*1e4:.2f} cm^2")
+    # intersection_area = polygons_2d.intersection(poly_rect).area
+    # print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
 
 
     # ---开始绘图---
@@ -1568,8 +1595,16 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
     plt.scatter(points[:, 0], points[:, 1], s=2, color='blue', alpha=0.5, label='Pointcloud')
 
     # 2. 绘制轮廓（红色）
-    contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
-    plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2, label='Contour')
+    used_labels = set()
+    lbl = 'Contour'
+    for contour_real in contours_real:
+        if lbl not in used_labels:
+            contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+            plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2,label=lbl)
+            used_labels.add(lbl)
+        else:
+            contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+            plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2)
 
     # 3. 绘制测试点
     point_color = 'green' if is_inside else 'red'
@@ -1581,7 +1616,7 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
     # 额外标注面积结果
     centroid = poly_rect.centroid.coords[0]
-    plt.text(centroid[0], centroid[1], f'Area={(intersection_area*1e4):.2f}', color='purple', fontsize=12, ha='center')
+    plt.text(centroid[0], centroid[1], f'Area={(max(intersection_areas)*1e4):.2f}', color='purple', fontsize=12, ha='center')
 
     # 设置其他显示选项
     plt.title('Pointcloud, Contour, Test TCP Point, and Test Gripper Bounding Box')
@@ -1593,14 +1628,16 @@ def get_plane_contour_polygon(pcd,dir1,dir2,center):
 
     plt.show()
 
-    return poly_contour
+    return polygons_2d
 
-plane_contour_polygon_list = []
-polygon_p1 = get_plane_contour_polygon(overlap_pcd,dir1,dir2,center)
-polygon_p2 = get_plane_contour_polygon(proj_pcd_p2,dir1,dir2,center)
-polygon_p3 = get_plane_contour_polygon(proj_pcd_p3,dir1,dir2,center)
-polygon_p4 = get_plane_contour_polygon(proj_pcd_p4,dir1,dir2,center)
-plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
+plane_contour_polygon_list = [
+    get_plane_contour_polygon(overlap_pcd,dir1,dir2,center),
+    get_plane_contour_polygon(proj_pcd_p2,dir1,dir2,center),
+    get_plane_contour_polygon(proj_pcd_p3,dir1,dir2,center),
+    get_plane_contour_polygon(proj_pcd_p4,dir1,dir2,center),
+    ]
+
+# plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
 
 #********************** Loop Find feasible TCP *********************
 def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
@@ -1623,11 +1660,31 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
             rect3_geom = Polygon(rectangles[2])  # 矩形3
             trapezoid_geom = Polygon(trapezoid)
 
-            condition_1 = plane_contour_polygon_list[0].contains(point_geom)
-            condition_2 = plane_contour_polygon_list[0].intersection(rect2_geom).area > min_area
-            condition_3 = not plane_contour_polygon_list[1].intersection(rect3_geom) and not plane_contour_polygon_list[1].intersection(trapezoid_geom)
-            condition_4 = not rect1_geom.intersects(plane_contour_polygon_list[2]) and not rect2_geom.intersects(plane_contour_polygon_list[2]) and not rect3_geom.intersects(plane_contour_polygon_list[2]) and not trapezoid_geom.intersects(plane_contour_polygon_list[2]) 
-            condition_5 = not trapezoid_geom.intersects(plane_contour_polygon_list[3])
+            poly_0_list = plane_contour_polygon_list[0]
+            poly_1_list = plane_contour_polygon_list[1]
+            poly_2_list = plane_contour_polygon_list[2]
+            poly_3_list = plane_contour_polygon_list[3]
+
+            condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
+            condition_2 = any(poly.intersection(rect2_geom).area > min_area for poly in poly_0_list)
+            condition_3 = all(
+                not poly.intersects(rect3_geom) and not poly.intersects(trapezoid_geom)
+                for poly in poly_1_list
+            )
+            condition_4 = all(
+                not poly.intersects(rect1_geom) and
+                not poly.intersects(rect2_geom) and
+                not poly.intersects(rect3_geom) and
+                not poly.intersects(trapezoid_geom)
+                for poly in poly_2_list
+            )
+            condition_5 = all(not poly.intersects(trapezoid_geom) for poly in poly_3_list)
+
+            # condition_1 = plane_contour_polygon_list[0].contains(point_geom)
+            # condition_2 = plane_contour_polygon_list[0].intersection(rect2_geom).area > min_area
+            # condition_3 = not plane_contour_polygon_list[1].intersection(rect3_geom) and not plane_contour_polygon_list[1].intersection(trapezoid_geom)
+            # condition_4 = not rect1_geom.intersects(plane_contour_polygon_list[2]) and not rect2_geom.intersects(plane_contour_polygon_list[2]) and not rect3_geom.intersects(plane_contour_polygon_list[2]) and not trapezoid_geom.intersects(plane_contour_polygon_list[2]) 
+            # condition_5 = not trapezoid_geom.intersects(plane_contour_polygon_list[3])
 
             if condition_1 and condition_2 and condition_3 and condition_4 and condition_5:
                 filtered_segment.append(shape)
