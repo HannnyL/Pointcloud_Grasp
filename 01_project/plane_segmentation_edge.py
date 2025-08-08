@@ -1000,23 +1000,55 @@ def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
     始终显示所有线段，只高亮当前索引对应的矩形与网格点。
     """
     all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
-    min_xy = all_pts.min(axis=0) - 0.02
-    max_xy = all_pts.max(axis=0) + 0.02
+    min_xy = all_pts.min(axis=0) - 0.025
+    max_xy = all_pts.max(axis=0) + 0.025
 
-    used_labels = set()
 
     for i in range(len(segments_2d)):
         fig, ax = plt.subplots(figsize=(6, 6))
-        ax.set_title(f"Highlight Segment {i+1}/{len(segments_2d)}")
+        ax.set_title(f"TCP Box and Test Grid Points for Edges {i+1}/{len(segments_2d)}")
 
         # 所有线段：蓝色
         lbl = 'Edges of Plane2'
-        for pt1, pt2 in segments_2d:
+        used_labels = set()
+        for j , (pt1, pt2) in enumerate(segments_2d):
+
+            if j == i:
+                mid = (pt1 + pt2) / 2
+                vec_12 = pt2 - pt1
+                vec_12 = vec_12 / np.linalg.norm(vec_12)
+                normal_clockwise_90 = [vec_12[1], -vec_12[0]]
+                normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
+
+                #parallel symbol
+                # start_point_line = mid - normal_clockwise_90 * 0.026
+                # end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                # end_point_base1 = end_point_line + vec_12 * 0.005
+                # end_point_base2 = end_point_line - vec_12 * 0.005
+                # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                #tilt symbol
+                start_point_line = mid - normal_clockwise_90 * 0.018
+                end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
+                end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
+                end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
+                ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
+                ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
+                ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+                
             if lbl not in used_labels:
                 ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1,label=lbl)
                 used_labels.add(lbl)
             else:
                 ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+
+
+
 
         # 当前的矩形：绿色
         rect = np.array(rectangles[i] + [rectangles[i][0]])
@@ -1036,7 +1068,7 @@ def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
         plt.show()
 
 
-# highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
+highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
 
 
 # Show Gripper Bounding Box
@@ -1110,7 +1142,7 @@ def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
     for i, segment_shape in enumerate(shapes):
         for j, shape in enumerate(segment_shape):
             fig, ax = plt.subplots(figsize=(8, 8))
-            ax.set_title(f"Segment {i+1}, Point {j+1}")
+            ax.set_title(f"Edge {i+1}, Point {j+1}:Bounding Boxes of Gripper and Robot Arm")
 
             used_labels = set()
 
@@ -1378,22 +1410,22 @@ def visualize_contours(points_2d, labels, contours, title="Projection Contours")
 
 
 # 1. 将p3投影到p2的PCA平面
-projected_2d, projected_3d = compute_pca_projection(proj_pcd_p2, proj_pcd_p3)
+# projected_2d, projected_3d = compute_pca_projection(proj_pcd_p2, proj_pcd_p3)
 
 # 2. 对投影后的点云进行聚类
-clusters, labels = cluster_points(projected_2d, eps=0.15)  # 可调整eps参数
+# clusters, labels = cluster_points(projected_2d, eps=0.15)  # 可调整eps参数
 
 # 3. 计算每个簇的轮廓
-contours = compute_contours(clusters, method='concave', alpha=0.05)
+# contours = compute_contours(clusters, method='concave', alpha=0.05)
 
 # 4. 可视化结果
-visualize_contours(projected_2d, labels, contours, title="Separated Contours")
+# visualize_contours(projected_2d, labels, contours, title="Separated Contours")
 
 # 5. 输出轮廓信息
-for i, (contour, cluster_idx) in enumerate(contours):
-    print(f"轮廓 {i+1} (来自簇 {cluster_idx}) 面积: {contour.area:.4f}")
-    if contour.geom_type == 'Polygon':
-        print(f"顶点数: {len(contour.exterior.coords)}")
+# for i, (contour, cluster_idx) in enumerate(contours):
+#     print(f"轮廓 {i+1} (来自簇 {cluster_idx}) 面积: {contour.area:.4f}")
+#     if contour.geom_type == 'Polygon':
+#         print(f"顶点数: {len(contour.exterior.coords)}")
 
 #**********************************
 def polygon_to_segments(polygon):
@@ -1417,17 +1449,17 @@ def multipolygon_to_segments(multipolygon):
         all_segments.extend(polygon_to_segments(poly))
     return all_segments
 
-for i, (contour, cluster_idx) in enumerate(contours):
-    if contour.geom_type == 'Polygon':
-        segments = polygon_to_segments(contour)
-    elif contour.geom_type == 'MultiPolygon':
-        segments = multipolygon_to_segments(contour)
-    else:
-        continue
+# for i, (contour, cluster_idx) in enumerate(contours):
+#     if contour.geom_type == 'Polygon':
+#         segments = polygon_to_segments(contour)
+#     elif contour.geom_type == 'MultiPolygon':
+#         segments = multipolygon_to_segments(contour)
+#     else:
+#         continue
 
-    for segment in segments:
-        x, y = segment.xy
-        plt.plot(x, y, 'k-', linewidth=2)
+#     for segment in segments:
+#         x, y = segment.xy
+#         plt.plot(x, y, 'k-', linewidth=2)
 
 
 #************************ Project P134 to 2 (CV2) **********************
@@ -1600,7 +1632,7 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
 
     filtered_shapes = []
     point = []
-    min_area = 10 * 1e-4
+    min_area = 0.3 * e_pg * c_pg
 
     for segment_shapes in all_shapes:
         filtered_segment = []
@@ -1617,7 +1649,7 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
             trapezoid_geom = Polygon(trapezoid)
 
             condition_1 = plane_contour_polygon_list[0].contains(point_geom)
-            condition_2 = plane_contour_polygon_list[0].intersection(rect2_geom).area < min_area
+            condition_2 = plane_contour_polygon_list[0].intersection(rect2_geom).area > min_area
             condition_3 = not plane_contour_polygon_list[1].intersection(rect3_geom) and not plane_contour_polygon_list[1].intersection(trapezoid_geom)
             condition_4 = not rect1_geom.intersects(plane_contour_polygon_list[2]) and not rect2_geom.intersects(plane_contour_polygon_list[2]) and not rect3_geom.intersects(plane_contour_polygon_list[2]) and not trapezoid_geom.intersects(plane_contour_polygon_list[2]) 
             condition_5 = not trapezoid_geom.intersects(plane_contour_polygon_list[3])
@@ -1625,6 +1657,9 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
             if condition_1 and condition_2 and condition_3 and condition_4 and condition_5:
                 filtered_segment.append(shape)
                 point_1.append(pt)
+            # if condition_1 :
+            #     filtered_segment.append(shape)
+            #     point_1.append(pt)                
 
         filtered_shapes.append(filtered_segment)
         point.append(point_1)
@@ -1655,37 +1690,71 @@ def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
     min_xy = all_pts.min(axis=0) - 0.02
     max_xy = all_pts.max(axis=0) + 0.02
 
-    used_labels = set()
 
     for i,pt in enumerate(TCP_points):
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.set_title(f"Edge {i+1}: Feasible TCP and TCP Box")
 
-            fig, ax = plt.subplots(figsize=(6, 6))
-            ax.set_title(f"Segment {i+1}: Feasible TCP and TCP Box")
+        # 所有线段：蓝色
+        used_labels = set()
+        lbl = 'Coutours of Plane'
+        for j, (pt1, pt2) in enumerate(segments_2d):
 
-            # 所有线段：蓝色
-            lbl = 'Coutours of Plane'
-            for pt1, pt2 in segments_2d:
-                if lbl not in used_labels:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
-                    used_labels.add(lbl)
-                else:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+            if j == i:
+                mid = (pt1 + pt2) / 2
+                vec_12 = pt2 - pt1
+                vec_12 = vec_12 / np.linalg.norm(vec_12)
+                normal_clockwise_90 = [vec_12[1], -vec_12[0]]
+                normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
 
-            # 当前点：红色点
-            pt = np.array(pt)
+                #parallel symbol
+                # start_point_line = mid - normal_clockwise_90 * 0.026
+                # end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                # end_point_base1 = end_point_line + vec_12 * 0.005
+                # end_point_base2 = end_point_line - vec_12 * 0.005
+                # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                #tilt symbol
+                start_point_line = mid - normal_clockwise_90 * 0.018
+                end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
+                end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
+                end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
+                ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
+                ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
+                ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+                
+            if lbl not in used_labels:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
+                used_labels.add(lbl)
+            else:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+
+        # 当前点：红色点
+        pt = np.array(pt).reshape(-1, 2)
+        # print(pt.shape)          # 看维度
+        # print(pt.ndim)
+        if pt.size:
             ax.plot(pt[:,0], pt[:,1], 'rx', label='Feasible TCP Point')
+        else:
+            print("No feasible TCP point found!")
+            ax.plot([], [], 'rx', label='Feasible TCP Point')                
 
-            # 当前矩形框（rectangles[0]）：绿色虚线框
-            rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
-            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
+        # 当前矩形框（rectangles[0]）：绿色虚线框
+        rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
+        ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
 
-            ax.set_xlim(min_xy[0], max_xy[0])
-            ax.set_ylim(min_xy[1], max_xy[1])
-            ax.set_aspect('equal')
-            ax.grid(True)
-            ax.legend()
-            plt.tight_layout()
-            plt.show()
+        ax.set_xlim(min_xy[0], max_xy[0])
+        ax.set_ylim(min_xy[1], max_xy[1])
+        ax.set_aspect('equal')
+        ax.grid(True)
+        ax.legend()
+        plt.tight_layout()
+        plt.show()
 
 highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
 
