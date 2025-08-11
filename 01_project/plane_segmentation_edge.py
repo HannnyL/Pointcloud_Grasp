@@ -57,6 +57,7 @@ class parallel_gripper:
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
 space = 0.005
+
 a_pg = 0.01 # Finger width
 w_pg = 0.3*space # Internal Safespace Finger width 
 v_pg = space # External Safespace Finger width 
@@ -67,25 +68,38 @@ k_pg = space # Safespace Gripper base bottom width
 q_pg = 0.08 # Gripper base top width
 r_pg = space # Safespace Gripper base top width
 
-# b_pg = 0.01 # TCP to Finger length end
-c_pg = 0.04 # TCP to (Safety space of Gripper)length end
+y_pg = max(q_pg + 2*r_pg, h_pg + 2*k_pg, f_pg + 2*(a_pg + v_pg)) # Gripper Bounding box max width
+
+b_pg = 0.02 # Gripper area length end
+c_pg = 0.02 # Gripper area to (Safety space of Gripper)length end
 d_pg = space # Safespace Gripper length
 x_pg = space # Safespace Gripper end to rubber
-n_pg = d_pg + c_pg + x_pg # Finger length
+n_pg = d_pg + c_pg + b_pg # Finger length
 t_pg = 0.065 # Gripper base bottom length
 u_pg = 0.05 # Gripper base top length
-j_pg = c_pg + d_pg + t_pg + u_pg # Gripper length (TCP to Robot)
-s_pg = j_pg + x_pg # Total gripper length
+# j_pg = c_pg + d_pg + t_pg + u_pg # Gripper length (TCP to Robot)
+s_pg = n_pg + t_pg + u_pg + x_pg # Total gripper length
 
 e_pg = 0.04 # Finger depth
 i_pg = space # Safespace finger depth
+
+z_pg = 0.02 # Gripper area depth
+
 l_pg = 0.12 # Gripper base bottom depth
 m_pg = space # Safespace gripper base bottom depth
 o_pg = 0.07 # Gripper base top  depth
 p_pg = space # Safespace gripper base top depth
 
-y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
+j_pg = max(l_pg + 2*m_pg, o_pg + 2*p_pg, e_pg + 2*i_pg)  # Gripper Bounding box max depth
 
+
+ra = 0.2#width of last robot arm limb
+rb = 0.2#depth of last robot arm limb
+rc = 0.3#length of last robot arm limb
+rd = max(ra,rb) #maximum diameter of last robot arm limb
+re = 0.005#robot arm diameter clearance
+rf = 0.005#robot arm length clearance
+rj = 0.0005#repeatability of robot arm
 radius_robot = 0.1
 lenth_robot = 0.2
 angle_robot = math.radians(45)
@@ -886,14 +900,14 @@ contour_segments_2d_p2,contour_normals_2d_p2,dir1,dir2,center = extract_and_visu
 
 
 # **************************** Find and Show Initial TCP Box & Test Grid Point ****************************
-def generate_grid_by_spacing(segments_2d, normals_2d, width=0.05, spacing=0.005):
+def generate_grid_by_spacing(segments_2d, normals_2d, depth=0.05, spacing_edge=0.005,spacing_normal=0.005):
     """
     每条线段沿法线方向扩展构造矩形，并在其中以 spacing 为间距生成等距网格点。
     
     参数：
         segments_2d: List of (pt1, pt2)，二维线段起止点
         normals_2d: List of unit normal vectors，每条线段一个
-        width: 抓取区域宽度（法线方向），单位 m
+        depth: 抓取区域宽度（法线方向），单位 m
         spacing: 网格点间隔（单位 m）
         
     返回：
@@ -902,6 +916,8 @@ def generate_grid_by_spacing(segments_2d, normals_2d, width=0.05, spacing=0.005)
     """
     rectangles = []
     all_grid_points = []
+
+    eps=1e-9
 
     for (pt1, pt2), n in zip(segments_2d, normals_2d):
         pt1 = np.array(pt1)
@@ -914,13 +930,15 @@ def generate_grid_by_spacing(segments_2d, normals_2d, width=0.05, spacing=0.005)
         dir_unit = dir_vec / seg_len
 
         # 决定方向上的步数
-        num_x = int(np.floor(seg_len / spacing))
-        num_y = int(np.floor(width / spacing))
-        if num_x < 1 or num_y < 1:
+        num_w = int(np.floor((seg_len-eps) / spacing_edge)+1)
+        start_spacing_edge = (seg_len-(num_w-1)*spacing_edge)/2.0
+        num_d = int(np.floor((depth-eps) / spacing_normal)+1)
+        start_spacing_normal = (depth-(num_d-1)*spacing_normal)/2.0      
+        if num_w < 1 or num_d < 1:
             continue
 
         # 构造矩形四个点（逆时针）
-        offset = -n * width
+        offset = -n * depth
         p1 = pt1 + offset
         p2 = pt2 + offset
         p3 = pt2
@@ -929,10 +947,12 @@ def generate_grid_by_spacing(segments_2d, normals_2d, width=0.05, spacing=0.005)
 
         # 在矩形内部生成规则点
         grid_pts = []
-        for i in range(num_x):
-            for j in range(num_y):
-                alpha = (i + 0.5) * spacing
-                beta = (j + 0.5) * spacing
+        for i in range(num_w):
+            for j in range(num_d):
+                alpha = i * spacing_edge + start_spacing_edge
+                beta = j * spacing_normal + start_spacing_normal
+                # alpha = i * spacing_edge
+                # beta = j * spacing_normal
                 pt = p1 + dir_unit * alpha + n * beta
                 grid_pts.append(pt)
         all_grid_points.append(np.array(grid_pts))
@@ -984,7 +1004,7 @@ def plot_segments_tcpbox_and_grids(segments_2d, rectangles, grid_points):
     plt.show()
 
 
-tcp_box,test_grid_points = generate_grid_by_spacing(contour_segments_2d_p2, contour_normals_2d_p2, width=c_pg, spacing=0.005)
+tcp_box,test_grid_points = generate_grid_by_spacing(contour_segments_2d_p2, contour_normals_2d_p2, depth=b_pg+c_pg, spacing_edge=z_pg/5, spacing_normal=b_pg/5)
 plot_segments_tcpbox_and_grids(contour_segments_2d_p2,tcp_box,test_grid_points)
 
 # Show each TCP Boxes and it's test grid points
@@ -1061,7 +1081,7 @@ def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
         plt.show()
 
 
-# highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
+highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
 
 
 # Show Gripper Bounding Box
@@ -1081,44 +1101,56 @@ def create_gripper_bounding_box(grid_points, segments_2d):
             rectangles = []
             
             #Safespace Finger front
-            center1 = pt - normal * x_pg
-            p11 = center1 + seg_dir * (e_pg/2 + i_pg) 
-            p12 = center1 + seg_dir * (e_pg/2 + i_pg) + normal * x_pg
-            p13 = center1 - seg_dir * (e_pg/2 + i_pg) + normal * x_pg
-            p14 = center1 - seg_dir * (e_pg/2 + i_pg)
+            center1 = pt - normal * (x_pg + rj)
+            p11 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 
+            p12 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
+            p13 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
+            p14 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2
             rectangles.append([p11, p12, p13, p14])
 
             #Finger length
             center2 = pt 
-            p21 = center2 + seg_dir * (e_pg/2 + i_pg) 
-            p22 = center2 + seg_dir * (e_pg/2 + i_pg) + normal * c_pg
-            p23 = center2 - seg_dir * (e_pg/2 + i_pg) + normal * c_pg
-            p24 = center2 - seg_dir * (e_pg/2 + i_pg)
+            p21 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2
+            p22 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
+            p23 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
+            p24 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2
             rectangles.append([p21, p22, p23, p24])
 
             #Gripper Base
-            center3 = center2 + normal * c_pg
-            p31 = center3 + seg_dir * (y_pg) 
-            p32 = center3 + seg_dir * (y_pg) + normal * (j_pg - c_pg)
-            p33 = center3 - seg_dir * (y_pg) + normal * (j_pg - c_pg)
-            p34 = center3 - seg_dir * (y_pg)
+            center3 = center2 + normal * (b_pg + c_pg + rj)
+            p31 = center3 + seg_dir * (j_pg + 2*rj)/2 
+            p32 = center3 + seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
+            p33 = center3 - seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
+            p34 = center3 - seg_dir * (j_pg + 2*rj)/2
             rectangles.append([p31, p32, p33, p34])
 
             #Robot Arm
-            base_center = center3 + normal * (j_pg - c_pg)
-            top_center = base_center + normal * lenth_robot
+            center4 = center3 + normal * (d_pg + t_pg + u_pg + rj)
+            p41 = center4 + seg_dir * (rd + re + 2*rj)/2
+            p42 = center4 - seg_dir * (rd + re + 2*rj)/2
+            p43 = center4 - seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
+            p44 = center4 + seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
+            rectangles.append([p41, p42, p43, p44])
 
-            b1 = base_center + seg_dir * radius_robot
-            b2 = base_center - seg_dir * radius_robot
-            t2 = top_center - seg_dir * (radius_robot + lenth_robot * math.tan(angle_robot))
-            t1 = top_center + seg_dir * (radius_robot + lenth_robot * math.tan(angle_robot))
+            #Gripper Area
+            center5 = pt
+            p51 = center5 + seg_dir * (z_pg - 2*rj)/2
+            p52 = center5 + seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)   
+            p53 = center5 - seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)
+            p54 = center5 - seg_dir * (z_pg - 2*rj)/2
+            rectangles.append([p51, p52, p53, p54])
 
-            trapezoid = [b1, b2, t2, t1]
+            #??????Box
+            center6 = center4 + normal * (rc + rf + 2*rj)
+            p61 = center6 + seg_dir * (rd + re + 2*rj)/2
+            p62 = center6 + seg_dir * (rd + re + 2*rj)/2 + normal * (0.01)   #?????
+            p63 = center6 - seg_dir * (rd + re + 2*rj)/2 + normal * (0.01)   #?????
+            p64 = center6 - seg_dir * (rd + re + 2*rj)/2
+            rectangles.append([p61, p62, p63, p64])
 
             segment_shapes.append({
                 'point': pt,
-                'rectangles': rectangles,
-                'trapezoid': trapezoid
+                'rectangles': rectangles
             })
 
         all_shapes.append(segment_shapes)
@@ -1166,9 +1198,9 @@ def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
             else:
                 ax.plot(pt[0], pt[1], 'ro', markersize=4)
 
-            # 三个矩形
-            colors = ['red', 'purple', 'orange']
-            Box_label = ['Finger Safe Space Box', 'Finger Box', 'Finger Base Box']
+            #6个矩形
+            colors = ['red', 'purple', 'orange','deepskyblue','yellow','limegreen']
+            Box_label = ['Finger Safe Space Box', 'Finger Box', 'Finger Base Box', 'Robot Arm Box','Gripper Area Box','????Box']
             for k, rect in enumerate(shape['rectangles']):
                 poly = np.array(rect + [rect[0]])
                 lbl = Box_label[k]
@@ -1179,13 +1211,13 @@ def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
                     ax.plot(poly[:, 0], poly[:, 1], color=colors[k], linewidth=1.5)
 
             # 梯形
-            trap = np.array(shape['trapezoid'] + [shape['trapezoid'][0]])
-            lbl = 'Robot Arm'
-            if lbl not in used_labels:
-                ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2, label=lbl)
-                used_labels.add(lbl)
-            else:
-                ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2)
+            # trap = np.array(shape['trapezoid'] + [shape['trapezoid'][0]])
+            # lbl = 'Robot Arm'
+            # if lbl not in used_labels:
+            #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2, label=lbl)
+            #     used_labels.add(lbl)
+            # else:
+            #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2)
 
             ax.set_xlim(min_xy[0], max_xy[0])
             ax.set_ylim(min_xy[1], max_xy[1])
@@ -1196,263 +1228,8 @@ def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
             plt.show()
 
 points_and_gripper_bounding_box = create_gripper_bounding_box(test_grid_points, contour_segments_2d_p2)
-# show_gripper_bounding_box(contour_segments_2d_p2,tcp_box,gripper_bounding_box))
+# show_gripper_bounding_box(contour_segments_2d_p2,tcp_box,points_and_gripper_bounding_box)
 
-
-# **************************** Project Plane 134 to 2 (Shapely) ****************************
-def compute_pca_projection(pcd_target, pcd_source):
-    """
-    将源点云投影到目标点云的PCA平面上
-    参数:
-        pcd_target: 目标点云(用于计算PCA平面)
-        pcd_source: 源点云(需要投影的点云)
-    返回:
-        projected_2d: 投影后的2D坐标(Nx2)
-        projected_3d: 投影后的3D坐标(Nx3)
-        projection_params: 投影参数(dict)
-    """
-    # 计算目标点云的PCA
-    points = np.asarray(pcd_target.points)
-    mean = np.mean(points, axis=0)
-    centered = points - mean
-    cov = np.cov(centered.T)
-    eigenvalues, eigenvectors = np.linalg.eig(cov)
-    sort_idx = np.argsort(eigenvalues)[::-1]
-    eigenvectors = eigenvectors[:, sort_idx]
-    
-    # 获取PCA基向量
-    plane_normal = eigenvectors[:, 2]  # 第三个主方向作为平面法向量
-    plane_basis1 = eigenvectors[:, 0]  # 第一个主方向
-    plane_basis2 = eigenvectors[:, 1]  # 第二个主方向
-    
-    # 投影源点云
-    source_points = np.asarray(pcd_source.points)
-    vectors = source_points - mean
-    distances = np.dot(vectors, plane_normal)
-    projected_3d = source_points - np.outer(distances, plane_normal)
-    
-    # 转换为2D坐标
-    projected_2d = np.zeros((len(source_points), 2))
-    for i, point in enumerate(projected_3d):
-        vec = point - mean
-        projected_2d[i, 0] = np.dot(vec, plane_basis1)
-        projected_2d[i, 1] = np.dot(vec, plane_basis2)
-    
-    # 存储投影参数
-    # projection_params = {
-    #     'mean': mean,
-    #     'normal': plane_normal,
-    #     'basis1': plane_basis1,
-    #     'basis2': plane_basis2
-    # }
-    
-    return projected_2d, projected_3d
-
-def cluster_points(points_2d, eps=0.1, min_samples=5):
-    """
-    对2D点进行聚类分组（增强版）
-    参数:
-        points_2d: 2D点坐标数组(Nx2)
-        eps: DBSCAN参数，邻域半径
-        min_samples: DBSCAN参数，形成簇的最小点数
-    返回:
-        clusters: 聚类结果列表，每个元素是一个簇的点集
-        labels: 每个点的标签数组
-    """
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points_2d)
-    labels = clustering.labels_
-    
-    clusters = []
-    for label in np.unique(labels):
-        if label == -1:  # 忽略噪声点
-            continue
-        cluster_points = points_2d[labels == label]
-        clusters.append(cluster_points)
-    
-    return clusters, labels
-
-def compute_concave_hull(points, alpha=0.1):
-    """
-    计算点集的凹包(Alpha Shape)（稳健版）
-    参数:
-        points: 点坐标数组(Nx2)
-        alpha: Alpha Shape参数，控制凹度
-    返回:
-        Shapely Polygon或MultiPolygon对象
-    """
-    if len(points) < 3:
-        return None
-    
-    try:
-        if len(points) == 3:
-            return MultiPoint(points).convex_hull
-        
-        tri = Delaunay(points)
-        edges = set()
-        edge_points = []
-        
-        def add_edge(i, j):
-            if (i, j) in edges or (j, i) in edges:
-                return
-            edges.add((i, j))
-            edge_points.append([points[i], points[j]])
-        
-        for simplex in tri.simplices:
-            ia, ib, ic = simplex
-            pa = points[ia]
-            pb = points[ib]
-            pc = points[ic]
-            
-            # 计算外接圆半径
-            a = np.linalg.norm(pa - pb)
-            b = np.linalg.norm(pb - pc)
-            c = np.linalg.norm(pc - pa)
-            s = (a + b + c) / 2.0
-            area = np.sqrt(max(0, s*(s-a)*(s-b)*(s-c)))
-            circum_r = a*b*c/(4.0*area) if area > 0 else float('inf')
-            
-            if circum_r < 1.0/alpha:
-                add_edge(ia, ib)
-                add_edge(ib, ic)
-                add_edge(ic, ia)
-        
-        if len(edge_points) == 0:
-            return MultiPoint(points).convex_hull
-        
-        m = MultiLineString(edge_points)
-        triangles = list(polygonize(m))
-        return unary_union(triangles)
-    
-    except Exception as e:
-        print(f"Alpha Shape计算失败，使用凸包替代: {e}")
-        return MultiPoint(points).convex_hull
-
-def compute_contours(clusters, method='concave', alpha=0.1):
-    """
-    计算每个簇的轮廓（增强版）
-    参数:
-        clusters: 聚类结果列表
-        method: 'concave'或'convex'，选择轮廓计算方法
-        alpha: 当method='concave'时使用的参数
-    返回:
-        contours: 轮廓列表，每个元素是(多边形, 点集索引)元组
-    """
-    contours = []
-    
-    for i, cluster in enumerate(clusters):
-        if len(cluster) < 3:
-            continue
-            
-        try:
-            if method == 'concave':
-                hull = compute_concave_hull(cluster, alpha)
-            else:
-                hull = ConvexHull(cluster)
-                hull_points = cluster[hull.vertices]
-                hull = Polygon(hull_points)
-            
-            if hull is not None and hull.is_valid:
-                contours.append((hull, i))  # 保存轮廓和对应的簇索引
-        except Exception as e:
-            print(f"簇 {i} 轮廓计算失败: {e}")
-            continue
-    
-    return contours
-
-def visualize_contours(points_2d, labels, contours, title="Projection Contours"):
-    """
-    可视化投影点和轮廓（增强版）
-    参数:
-        points_2d: 所有2D点坐标
-        labels: 聚类标签数组
-        contours: 轮廓列表
-        title: 图表标题
-    """
-    plt.figure(figsize=(12, 10))
-    
-    # 绘制所有点(按聚类着色)
-    unique_labels = np.unique(labels)
-    colors = plt.cm.tab20(np.linspace(0, 1, len(unique_labels)))
-    
-    for label, color in zip(unique_labels, colors):
-        if label == -1:
-            # 噪声点显示为灰色
-            cluster_points = points_2d[labels == label]
-            if len(cluster_points) > 0:
-                plt.scatter(cluster_points[:, 0], cluster_points[:, 1], 
-                           c='gray', s=5, alpha=0.3, label='Noise')
-        else:
-            cluster_points = points_2d[labels == label]
-            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], 
-                       c=color, s=10, label=f'Cluster {label}')
-    
-    # 绘制轮廓
-    for i, (contour, cluster_idx) in enumerate(contours):
-        if contour.geom_type == 'Polygon':
-            x, y = contour.exterior.xy
-            plt.plot(x, y, 'k-', linewidth=2, label=f'Contour {i+1}')
-        elif contour.geom_type == 'MultiPolygon':
-            for poly in contour.geoms:
-                x, y = poly.exterior.xy
-                plt.plot(x, y, 'k-', linewidth=2)
-    
-    plt.axis('equal')
-    plt.title(title)
-    plt.legend()
-    plt.show()
-
-
-# 1. 将p3投影到p2的PCA平面
-# projected_2d, projected_3d = compute_pca_projection(proj_pcd_p2, proj_pcd_p3)
-
-# 2. 对投影后的点云进行聚类
-# clusters, labels = cluster_points(projected_2d, eps=0.15)  # 可调整eps参数
-
-# 3. 计算每个簇的轮廓
-# contours = compute_contours(clusters, method='concave', alpha=0.05)
-
-# 4. 可视化结果
-# visualize_contours(projected_2d, labels, contours, title="Separated Contours")
-
-# 5. 输出轮廓信息
-# for i, (contour, cluster_idx) in enumerate(contours):
-#     print(f"轮廓 {i+1} (来自簇 {cluster_idx}) 面积: {contour.area:.4f}")
-#     if contour.geom_type == 'Polygon':
-#         print(f"顶点数: {len(contour.exterior.coords)}")
-
-#**********************************
-def polygon_to_segments(polygon):
-    """
-    将一个Polygon的外轮廓转为一组线段
-    返回一个 LineString 列表
-    """
-    coords = list(polygon.exterior.coords)
-    segments = []
-    for i in range(len(coords) - 1):  # 最后一个点等于第一个点，可跳过
-        segment = LineString([coords[i], coords[i+1]])
-        segments.append(segment)
-    return segments
-
-def multipolygon_to_segments(multipolygon):
-    """
-    将MultiPolygon中的每个Polygon都转换为线段集合
-    """
-    all_segments = []
-    for poly in multipolygon.geoms:
-        all_segments.extend(polygon_to_segments(poly))
-    return all_segments
-
-# for i, (contour, cluster_idx) in enumerate(contours):
-#     if contour.geom_type == 'Polygon':
-#         segments = polygon_to_segments(contour)
-#     elif contour.geom_type == 'MultiPolygon':
-#         segments = multipolygon_to_segments(contour)
-#     else:
-#         continue
-
-#     for segment in segments:
-#         x, y = segment.xy
-#         plt.plot(x, y, 'k-', linewidth=2)
 
 
 #************************ Project P134 to 2 (CV2) **********************
@@ -1644,7 +1421,7 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
 
     filtered_shapes = []
     point = []
-    min_area = 0.3 * e_pg * c_pg
+    min_area = 0.3 * z_pg * b_pg
 
     for segment_shapes in all_shapes:
         filtered_segment = []
@@ -1652,41 +1429,36 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
         for shape in segment_shapes:
             pt = shape['point']
             rectangles = shape['rectangles']
-            trapezoid = shape['trapezoid']
             
             point_geom = Point(pt)
-            rect1_geom = Polygon(rectangles[0])  # 矩形1
-            rect2_geom = Polygon(rectangles[1])  # 矩形2
-            rect3_geom = Polygon(rectangles[2])  # 矩形3
-            trapezoid_geom = Polygon(trapezoid)
+            rect1_geom = Polygon(rectangles[0])  # Finger tip Safe Space
+            rect2_geom = Polygon(rectangles[1])  # Finger length
+            rect3_geom = Polygon(rectangles[2])  # Gripper Base
+            rect4_geom = Polygon(rectangles[3])  # Robot arm 
+            rect5_geom = Polygon(rectangles[4])  # Gripper Area
+            rect6_geom = Polygon(rectangles[5])  # ?????Box
 
             poly_0_list = plane_contour_polygon_list[0]
             poly_1_list = plane_contour_polygon_list[1]
             poly_2_list = plane_contour_polygon_list[2]
             poly_3_list = plane_contour_polygon_list[3]
 
-            condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
-            condition_2 = any(poly.intersection(rect2_geom).area > min_area for poly in poly_0_list)
+            # condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
+            condition_2 = any(poly.intersection(rect5_geom).area > min_area for poly in poly_0_list)
             condition_3 = all(
-                not poly.intersects(rect3_geom) and not poly.intersects(trapezoid_geom)
+                not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
                 for poly in poly_1_list
             )
             condition_4 = all(
                 not poly.intersects(rect1_geom) and
                 not poly.intersects(rect2_geom) and
                 not poly.intersects(rect3_geom) and
-                not poly.intersects(trapezoid_geom)
+                not poly.intersects(rect4_geom)
                 for poly in poly_2_list
             )
-            condition_5 = all(not poly.intersects(trapezoid_geom) for poly in poly_3_list)
+            condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_3_list)
 
-            # condition_1 = plane_contour_polygon_list[0].contains(point_geom)
-            # condition_2 = plane_contour_polygon_list[0].intersection(rect2_geom).area > min_area
-            # condition_3 = not plane_contour_polygon_list[1].intersection(rect3_geom) and not plane_contour_polygon_list[1].intersection(trapezoid_geom)
-            # condition_4 = not rect1_geom.intersects(plane_contour_polygon_list[2]) and not rect2_geom.intersects(plane_contour_polygon_list[2]) and not rect3_geom.intersects(plane_contour_polygon_list[2]) and not trapezoid_geom.intersects(plane_contour_polygon_list[2]) 
-            # condition_5 = not trapezoid_geom.intersects(plane_contour_polygon_list[3])
-
-            if condition_1 and condition_2 and condition_3 and condition_4 and condition_5:
+            if  condition_2 and condition_3 and condition_4 and condition_5:
                 filtered_segment.append(shape)
                 point_1.append(pt)
             # if condition_1 :
@@ -1713,7 +1485,7 @@ def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
     - 当前点坐标（红色）
 
     参数：
-    - filtered_shapes: List[List[dict]]，每个 shape 包含 point, rectangles, trapezoid
+    - filtered_shapes: List[List[dict]]，每个 shape 包含 point, rectangles
     - segments_2d: List of 2D line segments [(pt1, pt2), ...]
     - rectangles_per_shape: 同 filtered_shapes 结构，用于提供 TCP box（rectangles[0]）
     """
@@ -1766,15 +1538,15 @@ def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
             else:
                 ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
 
-        # 当前点：红色点
+        # 当前点：绿色点
         pt = np.array(pt).reshape(-1, 2)
         # print(pt.shape)          # 看维度
         # print(pt.ndim)
         if pt.size:
-            ax.plot(pt[:,0], pt[:,1], 'rx', label='Feasible TCP Point')
+            ax.plot(pt[:,0], pt[:,1], marker='x', color='lime', label='Feasible TCP Point')
         else:
             print("No feasible TCP point found!")
-            ax.plot([], [], 'rx', label='Feasible TCP Point')                
+            ax.plot([], [], marker='x', color='lime', label='Feasible TCP Point')                
 
         # 当前矩形框（rectangles[0]）：绿色虚线框
         rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
