@@ -537,7 +537,7 @@ for count, (i, j) in enumerate(paired_planes):
 
 #---------------Find center plane---------------
 
-iii=0
+iii=4
 
 (mmm,nnn) = paired_planes[iii]
 plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
@@ -1437,6 +1437,11 @@ def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
             rect4_geom = Polygon(rectangles[3])  # Robot arm 
             rect5_geom = Polygon(rectangles[4])  # Gripper Area
             rect6_geom = Polygon(rectangles[5])  # ?????Box
+
+            for i in range(4):
+                lst = plane_contour_polygon_list[i]
+                if isinstance(lst, Polygon):
+                    plane_contour_polygon_list[i] = [lst]
 
             poly_0_list = plane_contour_polygon_list[0]
             poly_1_list = plane_contour_polygon_list[1]
