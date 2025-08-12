@@ -165,7 +165,7 @@ def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
     # 确定哪些聚类视为主体
     total_points = len(points)
     main_clusters = [label for label, size in cluster_sizes.items()
-                     if label != -1 and size >= min_cluster_ratio * total_points]
+                    if label != -1 and size >= min_cluster_ratio * total_points]
 
     mask = np.isin(labels, main_clusters)
 
@@ -283,8 +283,8 @@ def orient_normals_outward(
 
 path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
-orient_normals_outward(pcd)
-o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
+# orient_normals_outward(pcd)
+# o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
 # ************************
 original_points = np.asarray(pcd.points)
 original_indices = np.arange(len(original_points))
@@ -351,7 +351,7 @@ for i in range(max_planes):
     plane_models.append(plane_model) # 平面模型
     normal_vector = np.asarray(plane_model[0:3])
     normal_vector = normal_vector / np.linalg.norm(normal_vector)
-    normal_vector = correct_normal_direction_by_density(pcd, original_idx, normal_vector)
+    # normal_vector = correct_normal_direction_by_density(pcd, original_idx, normal_vector)
     plane_normals.append(normal_vector) # 平面法向量
 
     # 为当前平面着色（随机）
@@ -398,8 +398,8 @@ def create_normal_arrow(origin, normal, length=0.02, color=[1, 0, 0]):
         R = np.eye(3)
     else:
         vx = np.array([[0, -v[2], v[1]],
-                       [v[2], 0, -v[0]],
-                       [-v[1], v[0], 0]])
+                    [v[2], 0, -v[0]],
+                    [-v[1], v[0], 0]])
         R = np.eye(3) + vx + vx @ vx * ((1 - c) / (np.linalg.norm(v)**2))
 
     arrow.rotate(R, center=(0, 0, 0))
@@ -513,8 +513,8 @@ for group in parallel_groups:
             n1 = plane_normals[idx_i]
             n2 = plane_normals[idx_j]
 
-            if is_opposite_direction(idx_i, idx_j):
-                paired_planes.append((idx_i, idx_j))
+            # if is_opposite_direction(idx_i, idx_j):
+            paired_planes.append((idx_i, idx_j))
 
 #可视化
 for count, (i, j) in enumerate(paired_planes):
@@ -537,7 +537,7 @@ for count, (i, j) in enumerate(paired_planes):
 
 #---------------Find center plane---------------
 
-iii=0
+iii=14
 
 (mmm,nnn) = paired_planes[iii]
 plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
@@ -547,15 +547,20 @@ center_j = np.mean(plane_j_points, axis=0)
 
 center_ij = (center_i + center_j) / 2
 
+dist_dir_i = np.dot(center_ij - center_i,plane_normals[mmm])
+dist_dir_i = -1.0 if dist_dir_i > 0 else 1.0
+dist_dir_j = np.dot(center_ij - center_j,plane_normals[nnn])
+dist_dir_j = -1.0 if dist_dir_i > 0 else 1.0
+
 dist_i = abs(np.dot((center_ij - center_i),plane_normals[mmm]))
 dist_j = abs(np.dot((center_ij - center_j),plane_normals[nnn]))
 
 # project_i_dir = (center_ij - center_i) / np.linalg.norm(center_ij - center_i)
 # project_j_dir = (center_ij - center_j) / np.linalg.norm(center_ij - center_j)
 
-projected_i_points = plane_i_points - np.outer(dist_i,plane_normals[mmm])
+projected_i_points = plane_i_points - dist_dir_i*np.outer(dist_i,plane_normals[mmm])
 
-projected_j_points = plane_j_points - np.outer(dist_j,plane_normals[nnn])
+projected_j_points = plane_j_points - dist_dir_j*np.outer(dist_j,plane_normals[nnn])
 
 pcd_proj_i = o3d.geometry.PointCloud()
 pcd_proj_i.points = o3d.utility.Vector3dVector(projected_i_points)
@@ -618,6 +623,9 @@ def extract_overlap_region(proj_A, proj_B, threshold=0.001,remove = False):
 
         # 合并重合区域的点
         overlap_points = np.vstack([matched_A, matched_B])
+
+        if overlap_points.size == 0:
+            print("\n############################\nThere is no intersection between this pair of planes.\n############################\n")
 
         pcd_overlap = o3d.geometry.PointCloud()
         pcd_overlap.points = o3d.utility.Vector3dVector(overlap_points)
@@ -704,10 +712,10 @@ o3d.visualization.draw_geometries([
 
 #**************************** Plane 3: find outside(finger) collision area ****************************
 
-# center_i_outside = center_i + (y_pg) * (plane_normals[mmm])
-# center_j_outside = center_j + (y_pg) * (plane_normals[nnn])
-center_i_p3 = center_i + (0.02) * (plane_normals[mmm])
-center_j_p3 = center_j + (0.02) * (plane_normals[nnn])
+# center_i_outside = center_i + (j_pg/2) * (plane_normals[mmm])
+# center_j_outside = center_j + (j_pg/2) * (plane_normals[nnn])
+center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
+center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
 # 1. 筛选出在两个平面之间的点
 points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],0.001,False)
@@ -797,7 +805,17 @@ o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3.translate([0,0,0.000
 
 #**************************** P2: Find contours ****************************
 
-
+def auto_img_scale(pcd,
+                target_px=1000,          # 想让最长边落在~1000 px
+                max_scale=1500,          # 不要比 1500 更大
+                min_scale=200):           # 也别太小，避免过密
+    """
+    根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
+    """
+    dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
+    avg_d  = np.mean(dists)
+    scale = target_px * 0.0015/avg_d
+    return max(min(scale, max_scale), min_scale)
 #-----------------------chat-cv2------------------------
 
 def extract_and_visualize_contour_segments_with_normals(pcd, scale=1500, approx_eps_ratio=0.01):
@@ -1268,17 +1286,7 @@ points_and_gripper_bounding_box = create_gripper_bounding_box(test_grid_points, 
 
 #*******************************
 
-def auto_img_scale(pcd,
-                   target_px=1000,          # 想让最长边落在~1000 px
-                   max_scale=1500,          # 不要比 1500 更大
-                   min_scale=200):           # 也别太小，避免过密
-    """
-    根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
-    """
-    dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
-    avg_d  = np.mean(dists)
-    scale = target_px * 0.0015/avg_d
-    return max(min(scale, max_scale), min_scale)
+
 
 
 
@@ -1597,188 +1605,3 @@ def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
         plt.show()
 
 highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
-
-# #--------------------------find TCP area outside the collision area----------
-
-# if proj_pcd_outside.has_points() == False:
-#     print("No points in outside collision area!")
-#     candidate_TCP_remove_collsion_pcd = candidate_TCP_pcd
-# else:
-#     candidate_TCP_point = np.asarray(candidate_TCP_pcd.points)
-
-
-#     # # Methode 1 - cv2 range
-#     # projected_2d_out = np.dot(projected_points_outside, np.vstack([dir1, dir2]).T)
-#     # scale1 = 1000
-#     # min_xy1 = projected_2d_out.min(axis=0)
-#     # norm_points1 = ((projected_2d_out - min_xy1) * scale1).astype(np.int32)
-
-#     # canvas_size1 = norm_points1.max(axis=0) + 10
-#     # canvas1 = np.zeros((canvas_size1[1], canvas_size1[0]), dtype=np.uint8)
-#     # canvas1[norm_points1[:,1], norm_points1[:,0]] = 255
-
-#     # contours1, _ = cv2.findContours(canvas1, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-#     # expanded_polygons = []
-#     # x_expand_mm = 0.005  # e/2+i 外扩距离（以投影坐标单位为准）
-#     # for cnt in contours1:
-#     #     cnt = cnt.squeeze()
-#     #     poly = Polygon(cnt)
-#     #     expanded = poly.buffer(x_expand_mm * scale1)  # x_expand_mm 是外扩距离（以投影坐标单位为准）
-#     #     expanded_polygons.append(expanded)
-
-#     # projected_2d_2 = np.dot(candidate_TCP_point, np.vstack([dir1, dir2]).T)
-#     # projected_2d_2_norm = (projected_2d_2 - min_xy1)  # 无需缩放，保持原始比例
-
-#     # mask = []
-#     # for pt in projected_2d_2_norm:
-#     #     p = Point(pt)
-#     #     in_any = any(expanded.contains(p) for expanded in expanded_polygons)
-#     #     mask.append(not in_any)  # 不在任何外扩区才保留
-#     # mask = np.array(mask)
-
-#     # candidate_TCP_remove_collsion_point = candidate_TCP_point[mask]
-
-#     # candidate_TCP_remove_collsion_pcd = o3d.geometry.PointCloud()
-#     # candidate_TCP_remove_collsion_pcd.points = o3d.utility.Vector3dVector(candidate_TCP_remove_collsion_point)
-
-#     # # 点云1外扩轮廓可视化（还原到3D）
-#     # lines = []
-#     # for poly in expanded_polygons:
-#     #     if poly.is_empty:
-#     #         continue
-#     #     exterior = np.array(poly.exterior.coords)
-#     #     # 转回原始尺度
-#     #     exterior_2d = exterior
-#     #     # 投影回3D
-#     #     exterior_3d = [x * dir1 + y * dir2 + pca.mean_ for x, y in exterior_2d]
-#     #     # 连接成线段
-#     #     for i in range(len(exterior_3d) -1):
-#     #         lines.append((exterior_3d[i], exterior_3d[i+1]))
-
-#     # line_points = []
-#     # line_indices = []
-#     # idx = 0
-#     # for p1, p2 in lines:
-#     #     line_points.append(p1)
-#     #     line_points.append(p2)
-#     #     line_indices.append([idx, idx+1])
-#     #     idx +=2
-
-#     # line_set = o3d.geometry.LineSet()
-#     # line_set.points = o3d.utility.Vector3dVector(np.array(line_points))
-#     # line_set.lines = o3d.utility.Vector2iVector(line_indices)
-#     # line_set.paint_uniform_color([0, 1, 1])  # 红色框
-
-
-
-
-
-#     # # Methode 2 - point to point comparison
-#     candidate_TCP_remove_collsion_pcd = extract_overlap_region(candidate_TCP_pcd, proj_pcd_outside, threshold=0.001,remove=True)
-
-#     candidate_TCP_remove_collsion_pcd.paint_uniform_color([0, 1, 0]) 
-# o3d.visualization.draw_geometries([candidate_TCP_remove_collsion_pcd,boundary_pcd.translate((0,0,0.0001)),proj_pcd_outside],window_name="TCP/Inside Collision/Outside Collision")
-
-# #---------------------------Remove outliers & voxel sample ----------------------------------
-
-
-# # # 先体素降采样
-# # voxel_pcd = boundary_pcd.voxel_down_sample(voxel_size=0.002)
-
-# # # 然后再用最远点采样增强均匀性
-# # sampled_pcd = voxel_pcd.farthest_point_down_sample(num_samples=len(voxel_pcd.points))
-
-# # o3d.visualization.draw_geometries([sampled_pcd])
-
-# def statistical_outlier_removal(pcd, nb_neighbors=20, std_ratio=2.0):
-#     """
-#     统计离群点去除
-#     :param pcd: 输入点云
-#     :param nb_neighbors: 邻域点数
-#     :param std_ratio: 标准差乘数阈值
-#     :return: 滤波后的点云
-#     """
-#     cl, ind = pcd.remove_statistical_outlier(
-#         nb_neighbors=nb_neighbors,
-#         std_ratio=std_ratio
-#     )
-#     return cl
-
-# filtered_pcd = statistical_outlier_removal(candidate_TCP_remove_collsion_pcd)
-# o3d.visualization.draw_geometries([filtered_pcd],window_name="Statistical Outlier Removal CP")
-
-# # #---------------------------average grid----------------------------------
-# def regular_grid_sample(pcd, spacing):
-#     points = np.asarray(pcd.points)
-    
-#     # 找点云边界
-#     min_bound = points.min(axis=0)
-#     max_bound = points.max(axis=0)
-    
-#     # 生成网格点
-#     xs = np.arange(min_bound[0], max_bound[0], spacing)
-#     ys = np.arange(min_bound[1], max_bound[1], spacing)
-#     zs = np.arange(min_bound[2], max_bound[2], spacing)
-    
-#     grid = np.array(np.meshgrid(xs, ys, zs)).T.reshape(-1,3)
-    
-#     # 用KDTree找网格点是否在点云范围（最近邻距离）
-#     tree = cKDTree(points)
-#     dist, _ = tree.query(grid, distance_upper_bound=spacing/2)
-    
-#     mask = dist < spacing/2
-#     sampled_points = grid[mask]
-    
-#     # 生成点云
-#     sampled_pcd = o3d.geometry.PointCloud()
-#     sampled_pcd.points = o3d.utility.Vector3dVector(sampled_points)
-    
-#     return sampled_pcd
-
-# # 用法
-# spacing = 0.003  # 1cm间距
-# sampled_pcd = regular_grid_sample(filtered_pcd, spacing)
-# sampled_pcd.paint_uniform_color([0, 1, 0])
-# o3d.visualization.draw_geometries([sampled_pcd],window_name="Grid TCP")
-
-
-# #--------------------------GSS-------------------------
-
-
-# #-----------center score------
-# def colorize_by_distance(sampled_pcd, center_point):
-#     points = np.asarray(sampled_pcd.points)
-    
-#     # 计算每个点到中心的距离
-#     distances = np.linalg.norm(points - center_point, axis=1)
-    
-#     # 归一化到 [0,1]
-#     min_dist = distances.min()
-#     max_dist = distances.max()
-#     normalized = 1 - (distances - min_dist) / (max_dist - min_dist + 1e-8)  # 防止除零
-
-#     # 红(0) -> 绿(1) 线性插值
-#     colors = np.zeros((len(points), 3))
-#     colors[:,0] = 1 - normalized   # 红色分量
-#     colors[:,1] = normalized       # 绿色分量
-#     colors[:,2] = 0                # 无蓝色
-
-#     # 赋给点云
-#     sampled_pcd.colors = o3d.utility.Vector3dVector(colors)
-
-#     return sampled_pcd
-
-
-# #--------cavature score--------
-
-# # 用法
-# center_point =  np.mean(np.asarray(pcd.points), axis=0)
-# colored_pcd = colorize_by_distance(sampled_pcd, center_point)
-# pcd.paint_uniform_color([0.5, 0.5, 0.5])
-
-# sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-# sphere.paint_uniform_color([0, 0, 1])  # 蓝色
-# sphere.translate(center_point)
-
-# o3d.visualization.draw_geometries([colored_pcd,pcd,sphere],window_name="GSS Ranking Result")
