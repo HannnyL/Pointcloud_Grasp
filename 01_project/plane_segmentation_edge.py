@@ -20,6 +20,7 @@ from scipy.spatial import ConvexHull, Delaunay
 from shapely.ops import unary_union, polygonize
 
 import logging, pathlib
+import yaml
 
 
 
@@ -56,53 +57,51 @@ class parallel_gripper:
 
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
-space = 0.005
+with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\self_test.yaml", "r", encoding="utf-8") as f:
+    params = yaml.safe_load(f)
 
-a_pg = 0.01 # Finger width
-w_pg = 0.3*space # Internal Safespace Finger width 
-v_pg = space # External Safespace Finger width 
-f_pg = 0.10 # Distance gripper open
-g_pg = 0.02 # Distance gripper close
-h_pg = 0.12 # Gripper base bottom width
-k_pg = space # Safespace Gripper base bottom width 
-q_pg = 0.08 # Gripper base top width
-r_pg = space # Safespace Gripper base top width
+
+a_pg = params["a_pg"] # Finger width
+w_pg = params["w_pg"] # Internal Safespace Finger width 
+v_pg = params["v_pg"] # External Safespace Finger width 
+f_pg = params["f_pg"] # Distance gripper open
+g_pg = params["g_pg"] # Distance gripper close
+h_pg = params["h_pg"] # Gripper base bottom width
+k_pg = params["k_pg"] # Safespace Gripper base bottom width 
+q_pg = params["q_pg"] # Gripper base top width
+r_pg = params["r_pg"] # Safespace Gripper base top width
 
 y_pg = max(q_pg + 2*r_pg, h_pg + 2*k_pg, f_pg + 2*(a_pg + v_pg)) # Gripper Bounding box max width
 
-b_pg = 0.02 # Gripper area length end
-c_pg = 0.02 # Gripper area to (Safety space of Gripper)length end
-d_pg = space # Safespace Gripper length
-x_pg = space # Safespace Gripper end to rubber
+b_pg = params["b_pg"] # Gripper area length end
+c_pg = params["c_pg"] # Gripper area to (Safety space of Gripper)length end
+d_pg = params["d_pg"] # Safespace Gripper length
+x_pg = params["x_pg"] # Safespace Gripper end to rubber
 n_pg = d_pg + c_pg + b_pg # Finger length
-t_pg = 0.065 # Gripper base bottom length
-u_pg = 0.05 # Gripper base top length
-# j_pg = c_pg + d_pg + t_pg + u_pg # Gripper length (TCP to Robot)
+t_pg = params["t_pg"] # Gripper base bottom length
+u_pg = params["u_pg"] # Gripper base top length
 s_pg = n_pg + t_pg + u_pg + x_pg # Total gripper length
 
-e_pg = 0.04 # Finger depth
-i_pg = space # Safespace finger depth
+e_pg = params["e_pg"] # Finger depth
+i_pg = params["i_pg"] # Safespace finger depth
 
-z_pg = 0.02 # Gripper area depth
+z_pg = params["z_pg"] # Gripper area depth
 
-l_pg = 0.12 # Gripper base bottom depth
-m_pg = space # Safespace gripper base bottom depth
-o_pg = 0.07 # Gripper base top  depth
-p_pg = space # Safespace gripper base top depth
+l_pg = params["l_pg"] # Gripper base bottom depth
+m_pg = params["m_pg"] # Safespace gripper base bottom depth
+o_pg = params["o_pg"] # Gripper base top  depth
+p_pg = params["p_pg"] # Safespace gripper base top depth
 
 j_pg = max(l_pg + 2*m_pg, o_pg + 2*p_pg, e_pg + 2*i_pg)  # Gripper Bounding box max depth
 
 
-ra = 0.2#width of last robot arm limb
-rb = 0.2#depth of last robot arm limb
-rc = 0.3#length of last robot arm limb
+ra = params["ra"] #width of last robot arm limb
+rb = params["rb"] #depth of last robot arm limb
+rc = params["rc"] #length of last robot arm limb
 rd = max(ra,rb) #maximum diameter of last robot arm limb
-re = 0.005#robot arm diameter clearance
-rf = 0.005#robot arm length clearance
-rj = 0.0005#repeatability of robot arm
-radius_robot = 0.1
-lenth_robot = 0.2
-angle_robot = math.radians(45)
+re = params["re"] #robot arm diameter clearance
+rf = params["rf"] #robot arm length clearance
+rj = params["rj"] #repeatability of robot arm
 
 # **************************** Aid Functions **************************************
 def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):

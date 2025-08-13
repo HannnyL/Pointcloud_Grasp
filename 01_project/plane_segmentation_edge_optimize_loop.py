@@ -20,6 +20,7 @@ from scipy.spatial import ConvexHull, Delaunay
 from shapely.ops import unary_union, polygonize
 
 import logging, pathlib
+import yaml
 
 
 
@@ -56,73 +57,121 @@ class parallel_gripper:
 
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
-space = 0.005
+with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\self_test.yaml", "r", encoding="utf-8") as f:
+    params = yaml.safe_load(f)
 
-a_pg = 0.01 # Finger width
-w_pg = 0.3*space # Internal Safespace Finger width 
-v_pg = space # External Safespace Finger width 
-f_pg = 0.10 # Distance gripper open
-g_pg = 0.02 # Distance gripper close
-h_pg = 0.12 # Gripper base bottom width
-k_pg = space # Safespace Gripper base bottom width 
-q_pg = 0.08 # Gripper base top width
-r_pg = space # Safespace Gripper base top width
+
+a_pg = params["a_pg"] # Finger width
+w_pg = params["w_pg"] # Internal Safespace Finger width 
+v_pg = params["v_pg"] # External Safespace Finger width 
+f_pg = params["f_pg"] # Distance gripper open
+g_pg = params["g_pg"] # Distance gripper close
+h_pg = params["h_pg"] # Gripper base bottom width
+k_pg = params["k_pg"] # Safespace Gripper base bottom width 
+q_pg = params["q_pg"] # Gripper base top width
+r_pg = params["r_pg"] # Safespace Gripper base top width
 
 y_pg = max(q_pg + 2*r_pg, h_pg + 2*k_pg, f_pg + 2*(a_pg + v_pg)) # Gripper Bounding box max width
 
-b_pg = 0.02 # Gripper area length end
-c_pg = 0.02 # Gripper area to (Safety space of Gripper)length end
-d_pg = space # Safespace Gripper length
-x_pg = space # Safespace Gripper end to rubber
+b_pg = params["b_pg"] # Gripper area length end
+c_pg = params["c_pg"] # Gripper area to (Safety space of Gripper)length end
+d_pg = params["d_pg"] # Safespace Gripper length
+x_pg = params["x_pg"] # Safespace Gripper end to rubber
 n_pg = d_pg + c_pg + b_pg # Finger length
-t_pg = 0.065 # Gripper base bottom length
-u_pg = 0.05 # Gripper base top length
-# j_pg = c_pg + d_pg + t_pg + u_pg # Gripper length (TCP to Robot)
+t_pg = params["t_pg"] # Gripper base bottom length
+u_pg = params["u_pg"] # Gripper base top length
 s_pg = n_pg + t_pg + u_pg + x_pg # Total gripper length
 
-e_pg = 0.04 # Finger depth
-i_pg = space # Safespace finger depth
+e_pg = params["e_pg"] # Finger depth
+i_pg = params["i_pg"] # Safespace finger depth
 
-z_pg = 0.02 # Gripper area depth
+z_pg = params["z_pg"] # Gripper area depth
 
-l_pg = 0.12 # Gripper base bottom depth
-m_pg = space # Safespace gripper base bottom depth
-o_pg = 0.07 # Gripper base top  depth
-p_pg = space # Safespace gripper base top depth
+l_pg = params["l_pg"] # Gripper base bottom depth
+m_pg = params["m_pg"] # Safespace gripper base bottom depth
+o_pg = params["o_pg"] # Gripper base top  depth
+p_pg = params["p_pg"] # Safespace gripper base top depth
 
 j_pg = max(l_pg + 2*m_pg, o_pg + 2*p_pg, e_pg + 2*i_pg)  # Gripper Bounding box max depth
 
 
-ra = 0.2#width of last robot arm limb
-rb = 0.2#depth of last robot arm limb
-rc = 0.3#length of last robot arm limb
+ra = params["ra"] #width of last robot arm limb
+rb = params["rb"] #depth of last robot arm limb
+rc = params["rc"] #length of last robot arm limb
 rd = max(ra,rb) #maximum diameter of last robot arm limb
-re = 0.005#robot arm diameter clearance
-rf = 0.005#robot arm length clearance
-rj = 0.0005#repeatability of robot arm
-radius_robot = 0.1
-lenth_robot = 0.2
-angle_robot = math.radians(45)
+re = params["re"] #robot arm diameter clearance
+rf = params["rf"] #robot arm length clearance
+rj = params["rj"] #repeatability of robot arm
 
 # **************************** Aid Functions **************************************
-def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
+def filter_by_normal_orientation(
+    pcd, n_ref, cos_th=0.965, knn=30, radius=None, max_nn=50
+):
+    N = len(pcd.points)
+    if N == 0:
+        return pcd, np.zeros(0, dtype=bool)
+
+    n_ref = np.asarray(n_ref, dtype=float).reshape(3)
+    nr = np.linalg.norm(n_ref)
+    if nr == 0 or not np.isfinite(nr):
+        raise ValueError("n_ref 必须是非零、有限向量")
+    n_ref = n_ref / nr
+
+    need_est = (not pcd.has_normals()) or (len(pcd.normals) != N)
+
+    if need_est:
+        if N < 3:
+            # 点太少无法用邻域PCA估计，直接赋已知平面法向量
+            pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+        else:
+            # 半径自适应更稳（适应尺度变化）
+            if radius is None:
+                pts = np.asarray(pcd.points)
+                diag = float(np.linalg.norm(pts.max(0) - pts.min(0)))
+                radius = max(1e-9, 0.02 * diag)  # 经验值：对角线的 ~2%
+            pcd.estimate_normals(
+                o3d.geometry.KDTreeSearchParamHybrid(
+                    radius=radius,
+                    max_nn=min(max_nn, max(3, N-1))
+                )
+            )
+            # 保险再检查一次，仍不匹配就直接赋值
+            if (not pcd.has_normals()) or (len(pcd.normals) != N):
+                pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+
+    # 统一方向，失败就兜底为直接赋值
+    try:
+        pcd.orient_normals_to_align_with_direction(n_ref)
+    except RuntimeError:
+        pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+
+    pcd.normalize_normals()
+
+    normals = np.asarray(pcd.normals)
+    cosang = np.clip(normals @ n_ref, -1.0, 1.0)
+    # 若已经对齐，这里其实无需 abs；保留 abs 更稳
+    mask = (np.abs(cosang) >= float(cos_th))
+    out = pcd.select_by_index(np.where(mask)[0])
+    return out, mask
+
+def remove_pcd_outlier_statistical(pcd, neighbots=20,std_ratio=1.0):
 
     if len(pcd.points) == 0:
         print("Remove Outlier Error: Input point cloud is empty.")
         return pcd,None
     
-    # #statitical
-    # if isinstance(pcd, o3d.geometry.PointCloud):
-    #     filtered,ind = pcd.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
-    #     return filtered,ind
-    # elif isinstance(pcd,np.ndarray):
-    #     pcloud = o3d.geometry.PointCloud()
-    #     pcloud.points = o3d.utility.Vector3dVector(pcd)
-    #     filtered,ind = pcloud.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
-    #     return np.asarray(filtered.points),ind
-    # else:
-    #     print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
-    #     return None,None
+    #statitical
+    if isinstance(pcd, o3d.geometry.PointCloud):
+        filtered,ind = pcd.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
+        return filtered,ind
+    elif isinstance(pcd,np.ndarray):
+        pcloud = o3d.geometry.PointCloud()
+        pcloud.points = o3d.utility.Vector3dVector(pcd)
+        filtered,ind = pcloud.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
+        return np.asarray(filtered.points),ind
+    else:
+        print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
+        return None,None
     
     #radius
     # radius=0.005
@@ -139,11 +188,46 @@ def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
     #     print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
     #     return None,None
 
+    #adaptiv    
+    # points = pcd
+    # input_is_o3d = False
+    # nb_neighbors=20
+    # std_ratio=2.0
+    # verbose=True
+    # if isinstance(points, o3d.geometry.PointCloud):
+    #     input_is_o3d = True
+    #     points_np = np.asarray(points.points)
+    # elif isinstance(points, np.ndarray):
+    #     points_np = points
+    # else:
+    #     raise TypeError("Input must be o3d PointCloud or np.ndarray")
+
+    # nbrs = NearestNeighbors(n_neighbors=nb_neighbors+1).fit(points_np)
+    # distances, _ = nbrs.kneighbors(points_np)
+    # avg_distances = np.mean(distances[:, 1:], axis=1)
+
+    # dist_mean = np.mean(avg_distances)
+    # dist_std = np.std(avg_distances)
+
+    # threshold = dist_mean + std_ratio * dist_std
+    # mask = avg_distances <= threshold
+
+    # if verbose:
+    #     print(f"Mean dist: {dist_mean:.6f}, Std: {dist_std:.6f}, Threshold: {threshold:.6f}")
+    #     print(f"原始点数: {len(points_np)}, 保留点数: {np.sum(mask)}, 去除点数: {len(points_np)-np.sum(mask)}")
+
+    # filtered_points = points_np[mask]
+
+    # if input_is_o3d:
+    #     filtered_pcd = o3d.geometry.PointCloud()
+    #     filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+    #     return filtered_pcd, mask
+    # else:
+    #     return filtered_points, mask
+
+def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0.02,verbose=True):
     #dbscan
-    eps=0.007
-    min_samples=20
-    min_cluster_ratio=0.02
-    verbose=True
+
     # 兼容输入类型
     input_is_o3d = False
     if isinstance(pcd, o3d.geometry.PointCloud):
@@ -183,43 +267,6 @@ def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
         return filtered_pcd, mask
     else:
         return filtered_points, mask
-
-    #adaptiv    
-    # points = pcd
-    # input_is_o3d = False
-    # nb_neighbors=20
-    # std_ratio=2.0
-    # verbose=True
-    # if isinstance(points, o3d.geometry.PointCloud):
-    #     input_is_o3d = True
-    #     points_np = np.asarray(points.points)
-    # elif isinstance(points, np.ndarray):
-    #     points_np = points
-    # else:
-    #     raise TypeError("Input must be o3d PointCloud or np.ndarray")
-
-    # nbrs = NearestNeighbors(n_neighbors=nb_neighbors+1).fit(points_np)
-    # distances, _ = nbrs.kneighbors(points_np)
-    # avg_distances = np.mean(distances[:, 1:], axis=1)
-
-    # dist_mean = np.mean(avg_distances)
-    # dist_std = np.std(avg_distances)
-
-    # threshold = dist_mean + std_ratio * dist_std
-    # mask = avg_distances <= threshold
-
-    # if verbose:
-    #     print(f"Mean dist: {dist_mean:.6f}, Std: {dist_std:.6f}, Threshold: {threshold:.6f}")
-    #     print(f"原始点数: {len(points_np)}, 保留点数: {np.sum(mask)}, 去除点数: {len(points_np)-np.sum(mask)}")
-
-    # filtered_points = points_np[mask]
-
-    # if input_is_o3d:
-    #     filtered_pcd = o3d.geometry.PointCloud()
-    #     filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
-    #     return filtered_pcd, mask
-    # else:
-    #     return filtered_points, mask
 
 # **************************** Step 1: 读取点云+外法线估计 ****************************
 point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd"  # ← 修改为你的点云文件
@@ -281,8 +328,14 @@ def orient_normals_outward(
     return pcd
 
 
-path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd")
+path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\exmple part v1-Body_sampled.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
+
+dists = pcd.compute_nearest_neighbor_distance()
+avg_d  = np.mean(dists)
+if avg_d > 0.5:
+    scale_factor = 1/1000
+    pcd.scale(scale_factor, pcd.get_center())
 # orient_normals_outward(pcd)
 # o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
 # ************************
@@ -545,6 +598,15 @@ for iii in range(len(paired_planes)):
     center_i = np.mean(plane_i_points, axis=0)
     center_j = np.mean(plane_j_points, axis=0)
 
+    # dist_plane = abs(np.dot(center_i-center_j,plane_normals[mmm]))
+
+    # if dist_plane < g_pg:
+    #     print("\n####################\nPlane pair distance is too small, skip\n####################\n")
+    #     continue
+    # elif dist_plane > f_pg - 2 * w_pg:
+    #     print("\n####################\nPlane pair distance is too far, skip\n####################\n")
+    #     continue
+
     center_ij = (center_i + center_j) / 2
 
     dist_dir_i = np.dot(center_ij - center_i,plane_normals[mmm])
@@ -590,6 +652,12 @@ for iii in range(len(paired_planes)):
         """
         从两个已投影的点云中提取重合区域，返回合并后的重合点云
         """
+
+        dA = np.asarray(proj_A.compute_nearest_neighbor_distance())
+        dB = np.asarray(proj_B.compute_nearest_neighbor_distance())
+        print("median spacing A/B:", np.median(dA), np.median(dB))
+
+        threshold = 1.2 * max(np.median(dA), np.median(dB))
         # 构建 KDTree
         kdtree_B = o3d.geometry.KDTreeFlann(proj_B)
         kdtree_A = o3d.geometry.KDTreeFlann(proj_A)
@@ -621,12 +689,14 @@ for iii in range(len(paired_planes)):
                 if len(idx) > 0:
                     matched_B.append(p)
 
-            # 合并重合区域的点
-            overlap_points = np.vstack([matched_A, matched_B])
-
-            if overlap_points.size == 0:
+            A_keep = np.array(matched_A, dtype=float).reshape(-1, 3)
+            B_keep = np.array(matched_B, dtype=float).reshape(-1, 3)
+            if A_keep.size == 0 and B_keep.size == 0:
                 print("\n############################\nThere is no intersection between this pair of planes.\n############################\n")
                 return 2.1
+            else:
+                # 合并重合区域的点
+                overlap_points = A_keep if B_keep.size == 0 else (B_keep if A_keep.size == 0 else np.vstack([A_keep, B_keep]))
 
             pcd_overlap = o3d.geometry.PointCloud()
             pcd_overlap.points = o3d.utility.Vector3dVector(overlap_points)
@@ -638,7 +708,8 @@ for iii in range(len(paired_planes)):
     if overlap_pcd_unfilter == 2.1:
         continue
 
-    overlap_pcd,ind_p1 = remove_pcd_outlier(overlap_pcd_unfilter)
+    overlap_pcd,ind_p1 = filter_by_normal_orientation(overlap_pcd_unfilter,plane_normals[mmm])
+    overlap_pcd,ind_p1 = remove_pcd_outlier_statistical(overlap_pcd_unfilter)
     projected_points_p1 = np.asarray(overlap_pcd.points)
     o3d.io.write_point_cloud("overlap_pcd.pcd", overlap_pcd)
 
@@ -699,7 +770,7 @@ for iii in range(len(paired_planes)):
     proj_pcd_p2_unfilter.points = o3d.utility.Vector3dVector(projected_points_p2)
     proj_pcd_p2_unfilter.paint_uniform_color([1, 0, 0])  # 红色
 
-    proj_pcd_p2,ind_p2 = remove_pcd_outlier(proj_pcd_p2_unfilter)
+    proj_pcd_p2,ind_p2 = remove_pcd_outlier_dbscan(proj_pcd_p2_unfilter)
     projected_points_p2 = np.asarray(proj_pcd_p2.points)
 
     colors = np.ones((len(proj_pcd_p2_unfilter.points), 3)) * [1,1,0]
@@ -733,7 +804,7 @@ for iii in range(len(paired_planes)):
     proj_pcd_p3_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3)
     proj_pcd_p3_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
 
-    proj_pcd_p3,ind_p3 = remove_pcd_outlier(proj_pcd_p3_unfilter)
+    proj_pcd_p3,ind_p3 = remove_pcd_outlier_dbscan(proj_pcd_p3_unfilter)
     projected_points_p3 = np.asarray(proj_pcd_p3.points)
 
     o3d.io.write_point_cloud("proj_pcd_p3.pcd", proj_pcd_p3)
@@ -779,7 +850,7 @@ for iii in range(len(paired_planes)):
     proj_pcd_p4_unfilter.points = o3d.utility.Vector3dVector(projected_points_p4)
     proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])  # 蓝色
 
-    proj_pcd_p4,ind_p4 = remove_pcd_outlier(proj_pcd_p4_unfilter)
+    proj_pcd_p4,ind_p4 = remove_pcd_outlier_dbscan(proj_pcd_p4_unfilter)
     # proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     o3d.io.write_point_cloud("proj_pcd_p4.pcd", proj_pcd_p4)
     projecter_points_p4 = np.asarray(proj_pcd_p4.points)
@@ -835,109 +906,140 @@ for iii in range(len(paired_planes)):
         center = pca.mean_
 
         # 2. 投影到主平面 (2D)
-        projected_2d = np.dot(points - center, np.vstack([dir1, dir2]).T)
+        points = np.dot(points - center, np.vstack([dir1, dir2]).T)
 
-        # 3. 映射到像素图像
-        min_xy = projected_2d.min(axis=0)
-        norm_proj = ((projected_2d - min_xy) * scale).astype(np.int32)
-        canvas_size = norm_proj.max(axis=0) + 10
-        canvas = np.zeros((int(canvas_size[1]), int(canvas_size[0])), dtype=np.uint8)
-        canvas[norm_proj[:, 1], norm_proj[:, 0]] = 255
 
-        # —— 稀疏点连通性增强（轻度）——
-        if np.count_nonzero(canvas) < 1000:
-            k = np.ones((3, 3), np.uint8)
-            canvas = cv2.dilate(canvas, k, iterations=1)
-            canvas = cv2.morphologyEx(canvas, cv2.MORPH_CLOSE, k, iterations=1)
+        # 转换点为图像坐标
+        img_scale = auto_img_scale(pcd)
+        points_img = np.int32((points - points.min(axis=0)) * img_scale)
+        img_size = points_img.max(axis=0) + 10
 
-        # 4. 提取并简化轮廓（取最大外轮廓）
-        contours, _ = cv2.findContours(canvas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        if not contours:
-            print("没有找到轮廓")
-            return
+        # 创建空白图像并绘制点
+        img = np.zeros((img_size[1], img_size[0]), dtype=np.uint8)
+        for pt in points_img:
+            cv2.circle(img, tuple(pt), 1, 255, -1)
 
-        contour = max(contours, key=cv2.contourArea)  # 关键：不要用 contours[0]
-        peri = cv2.arcLength(contour, True)
+                # ---- 估计点的典型像素间距（用于选核）----
+        # 不依赖第三方：从点图估计一个粗略间距
+        # 方案：对网格下采样或用稀疏度近似，这里用形态学距离的近似方法
+        ys, xs = np.where(img > 0)
+        if len(xs) >= 2:
+            # 取一个小窗口统计最近像素距离（简化版估计）
+            # 也可换成 scipy.spatial.cKDTree 最近邻求中位数像素间距
+            sample = np.random.choice(len(xs), size=min(5000, len(xs)), replace=False)
+            pts = np.stack([xs[sample], ys[sample]], axis=1).astype(np.int32)
+            # 用小半径腐蚀看能否断开，近似推断间距（保守取值）
+            # 简化：用常数兜底
+            px_gap = 3
+        else:
+            px_gap = 3
 
-        # 给 epsilon 一个像素级下限，避免“简化没了”
-        eps = max(1.0, approx_eps_ratio * peri)
-        approx = cv2.approxPolyDP(contour, eps, True).reshape(-1, 2)
+        # ---- 形态学：先闭运算再开运算 ----
+        # 核大小与点间距挂钩，闭运算弥合空隙，开运算去掉毛刺
+        k = max(3, int(round(px_gap * 2)))      # 闭运算核（越大越“补全”）
+        k_open = max(3, int(round(px_gap * 0.8)))  # 开运算核（轻度去噪）
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        kernel_open  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
 
-        # 回退机制：简化后点数不足就用原始轮廓
-        if approx.shape[0] < 2:
-            approx = contour.reshape(-1, 2)
+        mask = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel_open,  iterations=1)
 
-        # 还原到投影平面的连续坐标
-        float2d = approx.astype(np.float32) / scale + min_xy
+        # ---- 填洞（确保得到真正的外轮廓）----
+        h, w = mask.shape
+        ff = mask.copy()
+        ff = cv2.copyMakeBorder(ff, 1,1,1,1, cv2.BORDER_CONSTANT, value=0)
+        cv2.floodFill(ff, None, (0,0), 255)                # 从边界外部泛洪
+        ff = ff[1:-1,1:-1]
+        holes = cv2.bitwise_not(ff) & cv2.bitwise_not(mask) # 外部区域
+        filled = cv2.bitwise_or(mask, cv2.bitwise_not(holes))
 
-        if float2d.ndim != 2 or float2d.shape[1] != 2 or float2d.shape[0] < 2:
-            print(f"简化后顶点不足或形状异常: {float2d.shape}")
-            return
+        # ---- 去除小连通域（防止孤点影响外轮廓）----
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(filled, connectivity=8)
+        min_area_px = (k * k) * 2  # 面积阈值：跟核相关
+        clean = np.zeros_like(filled)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area_px:
+                clean[labels == i] = 255
 
-        # 5. 构建 3D 线段和法线向量
-        line_segments_2d, line_normals_2d = [], []
-        line_segments_3d, line_indices, line_colors, arrow_meshes = [], [], [], []
 
-        # 场景尺度，用于法线箭头长度（2% 的对角尺度）
-        extent = np.ptp(projected_2d, axis=0)  # [dx, dy]
-        arrow_len = 0.02 * float(np.linalg.norm(extent))
+        # 使用findContours寻找轮廓
+        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        for i in range(len(float2d)):
-            pt1_2d = float2d[i]
-            pt2_2d = float2d[(i + 1) % len(float2d)]  # 闭合
+        # 绘制各种轮廓处理结果
+        img_contours = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        for cnt in contours:
+            # 4. 多边形近似（黄色）
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(img_contours, [approx], 0, (0, 255, 255), 2)
 
-            # 线段方向和法线
-            vec = pt2_2d - pt1_2d
-            length = np.linalg.norm(vec)
-            if length == 0:
-                continue
-            direction = vec / length
-            normal_2d = np.array([-direction[1], direction[0]])
+        # 显示轮廓和高级处理结果
+        plt.figure(figsize=(10, 6))
+        plt.imshow(img_contours)
+        plt.title('Contours: Plane 2')
+        plt.axis('off')
+        plt.show()
 
-            line_segments_2d.append([pt1_2d, pt2_2d])
-            line_normals_2d.append(normal_2d)
+        # ---- 将轮廓转换回原始坐标空间 ---- #
+        contours_real   = []        # 每个轮廓在 2D 投影坐标系下
+        polygons_2d     = []        # shapely Polygon 列表
+        # contour_points_list = []
+        linesets = []
 
-            # 中点和法线终点（2D）
-            mid_2d = (pt1_2d + pt2_2d) / 2
-            normal_end_2d = mid_2d + normal_2d * arrow_len
+        for cnt in contours:
+            # 近似多边形轮廓
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
 
-            # 投影回 3D 空间
-            pt1_3d = center + pt1_2d[0]*dir1 + pt1_2d[1]*dir2
-            pt2_3d = center + pt2_2d[0]*dir1 + pt2_2d[1]*dir2
-            mid_3d = center + mid_2d[0]*dir1 + mid_2d[1]*dir2
-            normal_end_3d = center + normal_end_2d[0]*dir1 + normal_end_2d[1]*dir2
+            # 从图像坐标系转换回投影的二维坐标系
+            points_2d_back = approx.astype(np.float32) / img_scale + points.min(axis=0)
 
-            # 线段添加到 LineSet
-            idx = len(line_segments_3d)
-            line_segments_3d.extend([pt1_3d, pt2_3d])
-            line_indices.append([idx, idx + 1])
-            color = plt.cm.hsv(i / len(float2d))[:3]
-            line_colors.append(color)
+            # 从二维坐标映射回原始三维空间
+            points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
 
-            # 法线箭头
-            arrow = o3d.geometry.LineSet(
-                points=o3d.utility.Vector3dVector([mid_3d, normal_end_3d]),
-                lines=o3d.utility.Vector2iVector([[0, 1]])
-            )
-            arrow.colors = o3d.utility.Vector3dVector([[0, 1, 0]])
-            arrow_meshes.append(arrow)
+            line_segments_2d, line_normals_2d = [], []
+            line_segments_3d, line_indices, line_colors = [], [], []
 
-        # 构建所有线段
-        if len(line_indices) == 0:
-            print("没有可视化的线段（可能轮廓太小或被过度简化）")
-            return
+            for i in range(len(points_2d_back)):
+                pt1_2d = points_2d_back[i]
+                pt2_2d = points_2d_back[(i + 1) % len(points_2d_back)]  # 闭合
 
-        line_set = o3d.geometry.LineSet()
-        line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
-        line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
-        line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
+                # 线段方向和法线
+                vec = pt2_2d - pt1_2d
+                length = np.linalg.norm(vec)
+                if length == 0:
+                    continue
+                direction = vec / length
+                normal_2d = np.array([-direction[1], direction[0]])
 
-        # 显示点云 + 线段 + 法线箭头
-        # o3d.visualization.draw_geometries(
-        #     [pcd, line_set] + arrow_meshes,
-        #     window_name="P2 Contour Lines + Normals",
-        #     width=1280, height=800
-        # )
+                line_segments_2d.append([pt1_2d, pt2_2d])
+                line_normals_2d.append(normal_2d)
+                
+
+                # 投影回 3D 空间
+                pt1_3d = center + pt1_2d[0]*dir1 + pt1_2d[1]*dir2
+                pt2_3d = center + pt2_2d[0]*dir1 + pt2_2d[1]*dir2
+
+
+                # 线段添加到 LineSet
+                idx = len(line_segments_3d)
+                line_segments_3d.extend([pt1_3d, pt2_3d])
+                line_indices.append([idx, idx + 1])
+                color = plt.cm.hsv(i / len(points_2d_back))[:3]
+                line_colors.append(color)
+
+            # 构建所有线段
+            if len(line_indices) == 0:
+                print("没有可视化的线段（可能轮廓太小或被过度简化）")
+                return
+
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
+            line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
+            line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
+
+        # 使用Open3D可视化所有轮廓
+        o3d.visualization.draw_geometries([pcd, line_set],window_name="P2 Contour Lines + Normals",width=1280, height=800)
 
         return line_segments_2d, line_normals_2d, dir1, dir2, center
 
@@ -1317,6 +1419,49 @@ for iii in range(len(paired_planes)):
         for pt in points_img:
             cv2.circle(img, tuple(pt), 1, 255, -1)
 
+                # ---- 估计点的典型像素间距（用于选核）----
+        # 不依赖第三方：从点图估计一个粗略间距
+        # 方案：对网格下采样或用稀疏度近似，这里用形态学距离的近似方法
+        ys, xs = np.where(img > 0)
+        if len(xs) >= 2:
+            # 取一个小窗口统计最近像素距离（简化版估计）
+            # 也可换成 scipy.spatial.cKDTree 最近邻求中位数像素间距
+            sample = np.random.choice(len(xs), size=min(5000, len(xs)), replace=False)
+            pts = np.stack([xs[sample], ys[sample]], axis=1).astype(np.int32)
+            # 用小半径腐蚀看能否断开，近似推断间距（保守取值）
+            # 简化：用常数兜底
+            px_gap = 3
+        else:
+            px_gap = 3
+
+        # ---- 形态学：先闭运算再开运算 ----
+        # 核大小与点间距挂钩，闭运算弥合空隙，开运算去掉毛刺
+        k = max(3, int(round(px_gap * 2)))      # 闭运算核（越大越“补全”）
+        k_open = max(3, int(round(px_gap * 0.8)))  # 开运算核（轻度去噪）
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        kernel_open  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
+
+        mask = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel_open,  iterations=1)
+
+        # ---- 填洞（确保得到真正的外轮廓）----
+        h, w = mask.shape
+        ff = mask.copy()
+        ff = cv2.copyMakeBorder(ff, 1,1,1,1, cv2.BORDER_CONSTANT, value=0)
+        cv2.floodFill(ff, None, (0,0), 255)                # 从边界外部泛洪
+        ff = ff[1:-1,1:-1]
+        holes = cv2.bitwise_not(ff) & cv2.bitwise_not(mask) # 外部区域
+        filled = cv2.bitwise_or(mask, cv2.bitwise_not(holes))
+
+        # ---- 去除小连通域（防止孤点影响外轮廓）----
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(filled, connectivity=8)
+        min_area_px = (k * k) * 2  # 面积阈值：跟核相关
+        clean = np.zeros_like(filled)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area_px:
+                clean[labels == i] = 255
+
+
         # 使用findContours寻找轮廓
         contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -1478,7 +1623,7 @@ for iii in range(len(paired_planes)):
                 rect3_geom = Polygon(rectangles[2])  # Gripper Base
                 rect4_geom = Polygon(rectangles[3])  # Robot arm 
                 rect5_geom = Polygon(rectangles[4])  # Gripper Area
-                rect6_geom = Polygon(rectangles[5])  # ?????Box
+                rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
 
                 for i in range(4):
                     lst = plane_contour_polygon_list[i]

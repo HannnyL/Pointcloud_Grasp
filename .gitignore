@@ -26,3 +26,5 @@ profile_results_whole_object_no_plot.txt
 profile_results_whole_object.txt
 profile_results_with_normal.txt
 01_project/test_pcd2stl.py
+profile_results_whole_object_no_plot_unregularbox.txt
+profile_results_whole_object_no_plot_bumped_cube_100k.txt

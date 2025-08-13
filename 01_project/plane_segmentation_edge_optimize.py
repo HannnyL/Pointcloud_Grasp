@@ -20,7 +20,7 @@ from scipy.spatial import ConvexHull, Delaunay
 from shapely.ops import unary_union, polygonize
 
 import logging, pathlib
-
+import yaml
 
 
 # -------------------- Step 0: 定义函数 ----------------
@@ -56,73 +56,122 @@ class parallel_gripper:
 
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
-space = 0.005
 
-a_pg = 0.01 # Finger width
-w_pg = 0.3*space # Internal Safespace Finger width 
-v_pg = space # External Safespace Finger width 
-f_pg = 0.10 # Distance gripper open
-g_pg = 0.02 # Distance gripper close
-h_pg = 0.12 # Gripper base bottom width
-k_pg = space # Safespace Gripper base bottom width 
-q_pg = 0.08 # Gripper base top width
-r_pg = space # Safespace Gripper base top width
+with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\self_test.yaml", "r", encoding="utf-8") as f:
+    params = yaml.safe_load(f)
+
+
+a_pg = params["a_pg"] # Finger width
+w_pg = params["w_pg"] # Internal Safespace Finger width 
+v_pg = params["v_pg"] # External Safespace Finger width 
+f_pg = params["f_pg"] # Distance gripper open
+g_pg = params["g_pg"] # Distance gripper close
+h_pg = params["h_pg"] # Gripper base bottom width
+k_pg = params["k_pg"] # Safespace Gripper base bottom width 
+q_pg = params["q_pg"] # Gripper base top width
+r_pg = params["r_pg"] # Safespace Gripper base top width
 
 y_pg = max(q_pg + 2*r_pg, h_pg + 2*k_pg, f_pg + 2*(a_pg + v_pg)) # Gripper Bounding box max width
 
-b_pg = 0.02 # Gripper area length end
-c_pg = 0.02 # Gripper area to (Safety space of Gripper)length end
-d_pg = space # Safespace Gripper length
-x_pg = space # Safespace Gripper end to rubber
+b_pg = params["b_pg"] # Gripper area length end
+c_pg = params["c_pg"] # Gripper area to (Safety space of Gripper)length end
+d_pg = params["d_pg"] # Safespace Gripper length
+x_pg = params["x_pg"] # Safespace Gripper end to rubber
 n_pg = d_pg + c_pg + b_pg # Finger length
-t_pg = 0.065 # Gripper base bottom length
-u_pg = 0.05 # Gripper base top length
-# j_pg = c_pg + d_pg + t_pg + u_pg # Gripper length (TCP to Robot)
+t_pg = params["t_pg"] # Gripper base bottom length
+u_pg = params["u_pg"] # Gripper base top length
 s_pg = n_pg + t_pg + u_pg + x_pg # Total gripper length
 
-e_pg = 0.04 # Finger depth
-i_pg = space # Safespace finger depth
+e_pg = params["e_pg"] # Finger depth
+i_pg = params["i_pg"] # Safespace finger depth
 
-z_pg = 0.02 # Gripper area depth
+z_pg = params["z_pg"] # Gripper area depth
 
-l_pg = 0.12 # Gripper base bottom depth
-m_pg = space # Safespace gripper base bottom depth
-o_pg = 0.07 # Gripper base top  depth
-p_pg = space # Safespace gripper base top depth
+l_pg = params["l_pg"] # Gripper base bottom depth
+m_pg = params["m_pg"] # Safespace gripper base bottom depth
+o_pg = params["o_pg"] # Gripper base top  depth
+p_pg = params["p_pg"] # Safespace gripper base top depth
 
 j_pg = max(l_pg + 2*m_pg, o_pg + 2*p_pg, e_pg + 2*i_pg)  # Gripper Bounding box max depth
 
 
-ra = 0.2#width of last robot arm limb
-rb = 0.2#depth of last robot arm limb
-rc = 0.3#length of last robot arm limb
+ra = params["ra"] #width of last robot arm limb
+rb = params["rb"] #depth of last robot arm limb
+rc = params["rc"] #length of last robot arm limb
 rd = max(ra,rb) #maximum diameter of last robot arm limb
-re = 0.005#robot arm diameter clearance
-rf = 0.005#robot arm length clearance
-rj = 0.0005#repeatability of robot arm
-radius_robot = 0.1
-lenth_robot = 0.2
-angle_robot = math.radians(45)
+re = params["re"] #robot arm diameter clearance
+rf = params["rf"] #robot arm length clearance
+rj = params["rj"] #repeatability of robot arm
 
 # **************************** Aid Functions **************************************
-def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
+def filter_by_normal_orientation(
+    pcd, n_ref, cos_th=0.965, knn=30, radius=None, max_nn=50
+):
+    N = len(pcd.points)
+    if N == 0:
+        return pcd, np.zeros(0, dtype=bool)
+
+    n_ref = np.asarray(n_ref, dtype=float).reshape(3)
+    nr = np.linalg.norm(n_ref)
+    if nr == 0 or not np.isfinite(nr):
+        raise ValueError("n_ref 必须是非零、有限向量")
+    n_ref = n_ref / nr
+
+    need_est = (not pcd.has_normals()) or (len(pcd.normals) != N)
+
+    if need_est:
+        if N < 3:
+            # 点太少无法用邻域PCA估计，直接赋已知平面法向量
+            pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+        else:
+            # 半径自适应更稳（适应尺度变化）
+            if radius is None:
+                pts = np.asarray(pcd.points)
+                diag = float(np.linalg.norm(pts.max(0) - pts.min(0)))
+                radius = max(1e-9, 0.02 * diag)  # 经验值：对角线的 ~2%
+            pcd.estimate_normals(
+                o3d.geometry.KDTreeSearchParamHybrid(
+                    radius=radius,
+                    max_nn=min(max_nn, max(3, N-1))
+                )
+            )
+            # 保险再检查一次，仍不匹配就直接赋值
+            if (not pcd.has_normals()) or (len(pcd.normals) != N):
+                pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+
+    # 统一方向，失败就兜底为直接赋值
+    try:
+        pcd.orient_normals_to_align_with_direction(n_ref)
+    except RuntimeError:
+        pcd.normals = o3d.utility.Vector3dVector(np.repeat(n_ref[None, :], N, axis=0))
+
+    pcd.normalize_normals()
+
+    normals = np.asarray(pcd.normals)
+    cosang = np.clip(normals @ n_ref, -1.0, 1.0)
+    # 若已经对齐，这里其实无需 abs；保留 abs 更稳
+    mask = (np.abs(cosang) >= float(cos_th))
+    out = pcd.select_by_index(np.where(mask)[0])
+    return out, mask
+
+def remove_pcd_outlier_statistical(pcd, neighbots=20,std_ratio=1.0):
 
     if len(pcd.points) == 0:
         print("Remove Outlier Error: Input point cloud is empty.")
         return pcd,None
     
-    # #statitical
-    # if isinstance(pcd, o3d.geometry.PointCloud):
-    #     filtered,ind = pcd.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
-    #     return filtered,ind
-    # elif isinstance(pcd,np.ndarray):
-    #     pcloud = o3d.geometry.PointCloud()
-    #     pcloud.points = o3d.utility.Vector3dVector(pcd)
-    #     filtered,ind = pcloud.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
-    #     return np.asarray(filtered.points),ind
-    # else:
-    #     print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
-    #     return None,None
+    #statitical
+    if isinstance(pcd, o3d.geometry.PointCloud):
+        filtered,ind = pcd.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
+        return filtered,ind
+    elif isinstance(pcd,np.ndarray):
+        pcloud = o3d.geometry.PointCloud()
+        pcloud.points = o3d.utility.Vector3dVector(pcd)
+        filtered,ind = pcloud.remove_statistical_outlier(nb_neighbors=neighbots, std_ratio=std_ratio)
+        return np.asarray(filtered.points),ind
+    else:
+        print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
+        return None,None
     
     #radius
     # radius=0.005
@@ -139,11 +188,46 @@ def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
     #     print("Error: Input type is not supported, neither 'PointCloud' nor 'np.ndarray'.")
     #     return None,None
 
+    #adaptiv    
+    # points = pcd
+    # input_is_o3d = False
+    # nb_neighbors=20
+    # std_ratio=2.0
+    # verbose=True
+    # if isinstance(points, o3d.geometry.PointCloud):
+    #     input_is_o3d = True
+    #     points_np = np.asarray(points.points)
+    # elif isinstance(points, np.ndarray):
+    #     points_np = points
+    # else:
+    #     raise TypeError("Input must be o3d PointCloud or np.ndarray")
+
+    # nbrs = NearestNeighbors(n_neighbors=nb_neighbors+1).fit(points_np)
+    # distances, _ = nbrs.kneighbors(points_np)
+    # avg_distances = np.mean(distances[:, 1:], axis=1)
+
+    # dist_mean = np.mean(avg_distances)
+    # dist_std = np.std(avg_distances)
+
+    # threshold = dist_mean + std_ratio * dist_std
+    # mask = avg_distances <= threshold
+
+    # if verbose:
+    #     print(f"Mean dist: {dist_mean:.6f}, Std: {dist_std:.6f}, Threshold: {threshold:.6f}")
+    #     print(f"原始点数: {len(points_np)}, 保留点数: {np.sum(mask)}, 去除点数: {len(points_np)-np.sum(mask)}")
+
+    # filtered_points = points_np[mask]
+
+    # if input_is_o3d:
+    #     filtered_pcd = o3d.geometry.PointCloud()
+    #     filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+    #     return filtered_pcd, mask
+    # else:
+    #     return filtered_points, mask
+
+def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0.02,verbose=True):
     #dbscan
-    eps=0.007
-    min_samples=20
-    min_cluster_ratio=0.02
-    verbose=True
+
     # 兼容输入类型
     input_is_o3d = False
     if isinstance(pcd, o3d.geometry.PointCloud):
@@ -184,45 +268,8 @@ def remove_pcd_outlier(pcd, neighbots=20,std_ratio=1.0):
     else:
         return filtered_points, mask
 
-    #adaptiv    
-    # points = pcd
-    # input_is_o3d = False
-    # nb_neighbors=20
-    # std_ratio=2.0
-    # verbose=True
-    # if isinstance(points, o3d.geometry.PointCloud):
-    #     input_is_o3d = True
-    #     points_np = np.asarray(points.points)
-    # elif isinstance(points, np.ndarray):
-    #     points_np = points
-    # else:
-    #     raise TypeError("Input must be o3d PointCloud or np.ndarray")
-
-    # nbrs = NearestNeighbors(n_neighbors=nb_neighbors+1).fit(points_np)
-    # distances, _ = nbrs.kneighbors(points_np)
-    # avg_distances = np.mean(distances[:, 1:], axis=1)
-
-    # dist_mean = np.mean(avg_distances)
-    # dist_std = np.std(avg_distances)
-
-    # threshold = dist_mean + std_ratio * dist_std
-    # mask = avg_distances <= threshold
-
-    # if verbose:
-    #     print(f"Mean dist: {dist_mean:.6f}, Std: {dist_std:.6f}, Threshold: {threshold:.6f}")
-    #     print(f"原始点数: {len(points_np)}, 保留点数: {np.sum(mask)}, 去除点数: {len(points_np)-np.sum(mask)}")
-
-    # filtered_points = points_np[mask]
-
-    # if input_is_o3d:
-    #     filtered_pcd = o3d.geometry.PointCloud()
-    #     filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
-    #     return filtered_pcd, mask
-    # else:
-    #     return filtered_points, mask
-
 # **************************** Step 1: 读取点云+外法线估计 ****************************
-point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd"  # ← 修改为你的点云文件
+point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Bump Cube_sampled.pcd"  # ← 修改为你的点云文件
 normal_radius = 0.05
 curvature_radius = 0.05
 dbscan_eps = 0.1
@@ -283,6 +330,12 @@ def orient_normals_outward(
 
 path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
+dists = pcd.compute_nearest_neighbor_distance()
+avg_d  = np.mean(dists)
+if avg_d > 0.5:
+    scale_factor = 1/1000
+    pcd.scale(scale_factor, pcd.get_center())
+# pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.01, max_nn=50))
 # orient_normals_outward(pcd)
 # o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
 # ************************
@@ -537,736 +590,637 @@ for count, (i, j) in enumerate(paired_planes):
 
 #---------------Find center plane---------------
 
-iii=14
+# iii=11
+for iii in range(len(paired_planes)):
+    (mmm,nnn) = paired_planes[iii]
+    plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
+    plane_j_points = np.asarray(pcd.select_by_index(plane_indices_list[nnn]).points)
+    center_i = np.mean(plane_i_points, axis=0)
+    center_j = np.mean(plane_j_points, axis=0)
 
-(mmm,nnn) = paired_planes[iii]
-plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
-plane_j_points = np.asarray(pcd.select_by_index(plane_indices_list[nnn]).points)
-center_i = np.mean(plane_i_points, axis=0)
-center_j = np.mean(plane_j_points, axis=0)
+    # dist_plane = abs(np.dot(center_i-center_j,plane_normals[mmm]))
 
-center_ij = (center_i + center_j) / 2
+    # if dist_plane < g_pg:
+    #     print("\n####################\nPlane pair distance is too small, skip\n####################\n")
+    #     continue
+    # elif dist_plane > f_pg - 2 * w_pg:
+    #     print("\n####################\nPlane pair distance is too far, skip\n####################\n")
+    #     continue
 
-dist_dir_i = np.dot(center_ij - center_i,plane_normals[mmm])
-dist_dir_i = -1.0 if dist_dir_i > 0 else 1.0
-dist_dir_j = np.dot(center_ij - center_j,plane_normals[nnn])
-dist_dir_j = -1.0 if dist_dir_i > 0 else 1.0
+    center_ij = (center_i + center_j) / 2
 
-dist_i = abs(np.dot((center_ij - center_i),plane_normals[mmm]))
-dist_j = abs(np.dot((center_ij - center_j),plane_normals[nnn]))
+    dist_dir_i = np.dot(center_ij - center_i,plane_normals[mmm])
+    dist_dir_i = -1.0 if dist_dir_i > 0 else 1.0
+    dist_dir_j = np.dot(center_ij - center_j,plane_normals[nnn])
+    dist_dir_j = -1.0 if dist_dir_i > 0 else 1.0
 
-# project_i_dir = (center_ij - center_i) / np.linalg.norm(center_ij - center_i)
-# project_j_dir = (center_ij - center_j) / np.linalg.norm(center_ij - center_j)
+    dist_i = abs(np.dot((center_ij - center_i),plane_normals[mmm]))
+    dist_j = abs(np.dot((center_ij - center_j),plane_normals[nnn]))
 
-projected_i_points = plane_i_points - dist_dir_i*np.outer(dist_i,plane_normals[mmm])
+    # project_i_dir = (center_ij - center_i) / np.linalg.norm(center_ij - center_i)
+    # project_j_dir = (center_ij - center_j) / np.linalg.norm(center_ij - center_j)
 
-projected_j_points = plane_j_points - dist_dir_j*np.outer(dist_j,plane_normals[nnn])
+    projected_i_points = plane_i_points - dist_dir_i*np.outer(dist_i,plane_normals[mmm])
 
-pcd_proj_i = o3d.geometry.PointCloud()
-pcd_proj_i.points = o3d.utility.Vector3dVector(projected_i_points)
-pcd_proj_i.paint_uniform_color([0, 1, 0])  # 绿色
+    projected_j_points = plane_j_points - dist_dir_j*np.outer(dist_j,plane_normals[nnn])
 
-pcd_proj_j = o3d.geometry.PointCloud()
-pcd_proj_j.points = o3d.utility.Vector3dVector(projected_j_points)
-pcd_proj_j.paint_uniform_color([1, 0, 0])  # 红色
+    pcd_proj_i = o3d.geometry.PointCloud()
+    pcd_proj_i.points = o3d.utility.Vector3dVector(projected_i_points)
+    pcd_proj_i.paint_uniform_color([0, 1, 0])  # 绿色
 
-pcd_orig_i = pcd.select_by_index(plane_indices_list[mmm])
-pcd_orig_j = pcd.select_by_index(plane_indices_list[nnn])
+    pcd_proj_j = o3d.geometry.PointCloud()
+    pcd_proj_j.points = o3d.utility.Vector3dVector(projected_j_points)
+    pcd_proj_j.paint_uniform_color([1, 0, 0])  # 红色
 
-pcd_orig_i.paint_uniform_color([0.7, 0.7, 0.7])  # 淡灰色
-pcd_orig_j.paint_uniform_color([0.7, 0.7, 0.7])
+    pcd_orig_i = pcd.select_by_index(plane_indices_list[mmm])
+    pcd_orig_j = pcd.select_by_index(plane_indices_list[nnn])
 
-o3d.visualization.draw_geometries([
-    pcd,
-    pcd_orig_i,
-    pcd_orig_j,
-    pcd_proj_i,
-    pcd_proj_j
-], window_name="Plane Projection", width=800, height=600)
+    pcd_orig_i.paint_uniform_color([0.7, 0.7, 0.7])  # 淡灰色
+    pcd_orig_j.paint_uniform_color([0.7, 0.7, 0.7])
 
-#**************************** Plane 1: Project planes and find overlap region ****************************
+    o3d.visualization.draw_geometries([
+        pcd,
+        pcd_orig_i,
+        pcd_orig_j,
+        pcd_proj_i,
+        pcd_proj_j
+    ], window_name="Plane Projection", width=800, height=600)
 
-def extract_overlap_region(proj_A, proj_B, threshold=0.001,remove = False):
-    """
-    从两个已投影的点云中提取重合区域，返回合并后的重合点云
-    """
-    # 构建 KDTree
-    kdtree_B = o3d.geometry.KDTreeFlann(proj_B)
-    kdtree_A = o3d.geometry.KDTreeFlann(proj_A)
+    #**************************** Plane 1: Project planes and find overlap region ****************************
 
-    points_A = np.asarray(proj_A.points)
-    points_B = np.asarray(proj_B.points)
+    def extract_overlap_region(proj_A, proj_B, threshold=0.001,remove = False):
+        """
+        从两个已投影的点云中提取重合区域，返回合并后的重合点云
+        """
 
-    # A 中那些有邻近 B 点的
-    matched_A = []
-    dismatched_A = []
-    for p in points_A:
-        [_, idx, _] = kdtree_B.search_radius_vector_3d(p, threshold)
-        if len(idx) > 0:
-            matched_A.append(p)
-        else:
-            dismatched_A.append(p)
+        dA = np.asarray(proj_A.compute_nearest_neighbor_distance())
+        dB = np.asarray(proj_B.compute_nearest_neighbor_distance())
+        print("median spacing A/B:", np.median(dA), np.median(dB))
 
-    if remove == True:
-        pcd_remove_overlap = o3d.geometry.PointCloud()
-        pcd_remove_overlap.points = o3d.utility.Vector3dVector(dismatched_A)
-        pcd_remove_overlap.paint_uniform_color([1, 0, 0])
+        threshold = 1.2 * max(np.median(dA), np.median(dB))
+        # 构建 KDTree
+        kdtree_B = o3d.geometry.KDTreeFlann(proj_B)
+        kdtree_A = o3d.geometry.KDTreeFlann(proj_A)
 
-        return pcd_remove_overlap
-    else:
-        # B 中那些有邻近 A 点的
-        matched_B = []
-        for p in points_B:
-            [_, idx, _] = kdtree_A.search_radius_vector_3d(p, threshold)
+        points_A = np.asarray(proj_A.points)
+        points_B = np.asarray(proj_B.points)
+
+        # A 中那些有邻近 B 点的
+        matched_A = []
+        dismatched_A = []
+        for p in points_A:
+            [_, idx, _] = kdtree_B.search_radius_vector_3d(p, threshold)
             if len(idx) > 0:
-                matched_B.append(p)
-
-        # 合并重合区域的点
-        overlap_points = np.vstack([matched_A, matched_B])
-
-        if overlap_points.size == 0:
-            print("\n############################\nThere is no intersection between this pair of planes.\n############################\n")
-
-        pcd_overlap = o3d.geometry.PointCloud()
-        pcd_overlap.points = o3d.utility.Vector3dVector(overlap_points)
-        pcd_overlap.paint_uniform_color([0, 1, 0])  # 绿色标记
-
-        return pcd_overlap
-
-overlap_pcd_unfilter = extract_overlap_region(pcd_proj_i, pcd_proj_j, threshold=0.001)
-
-overlap_pcd,ind_p1 = remove_pcd_outlier(overlap_pcd_unfilter)
-projected_points_p1 = np.asarray(overlap_pcd.points)
-o3d.io.write_point_cloud("overlap_pcd.pcd", overlap_pcd)
-
-colors = np.ones((len(overlap_pcd_unfilter.points), 3)) * [1,1,0]
-colors[ind_p1,:] = [0,1,0]
-overlap_pcd_unfilter.colors = o3d.utility.Vector3dVector(colors)
-
-o3d.visualization.draw_geometries([overlap_pcd_unfilter,pcd_orig_i,pcd_orig_j],window_name="Pair of Planes and Their Overlap Region")
-
-
-#**************************** Plane 2: Find points between planes ****************************
-def project_points_to_plane(points, plane_point, plane_normal):
-    v = points - plane_point
-    d = np.dot(v, plane_normal)
-    return points - np.outer(d, plane_normal)
-
-def select_points_between_planes(pcd, center_i, center_j, plane_normal, margin=0.0005, include_planes=True):
-    """
-    筛选出完整点云中夹在两个平面之间的点
-    """
-
-    if isinstance(pcd, o3d.geometry.PointCloud):
-        points = np.asarray(pcd.points)
-    elif isinstance(pcd, np.ndarray):
-        points = pcd
-    # center_i = plane_i_pts.mean(axis=0)
-    # center_j = plane_j_pts.mean(axis=0)
-
-    # 平面间距离向量（方向需与法向一致）
-    dist_vec = center_j - center_i
-    dist_vec /= np.linalg.norm(dist_vec)
-    
-    # 投影每个点到法向上，得到相对两个平面的距离
-    d_i = np.dot(points - center_i, plane_normal)
-    d_j = np.dot(points - center_j, plane_normal)
-
-    # 判断点是否在两个平面之间（允许一个 margin 容差）
-    if include_planes:
-        mask = (d_i * d_j <= 0) | (np.abs(d_i) <= margin) | (np.abs(d_j) <= margin)
-    else:
-        mask = (d_i * d_j < 0) & (np.abs(d_i) > margin) & (np.abs(d_j) > margin)
-
-    points_between = points[mask]
-    points_beside = points[~mask]
-    return points_between,points_beside
-
-
-
-
-# 1. 筛选出在两个平面之间的点
-points_between_p2,points_beside = select_points_between_planes(pcd, center_i, center_j, plane_normals[mmm])
-
-# 2. 投影到中间平面
-projected_points_p2 = project_points_to_plane(points_between_p2, center_ij, plane_normals[mmm])
-
-# 3. 创建 PointCloud 对象
-proj_pcd_p2_unfilter = o3d.geometry.PointCloud()
-proj_pcd_p2_unfilter.points = o3d.utility.Vector3dVector(projected_points_p2)
-proj_pcd_p2_unfilter.paint_uniform_color([1, 0, 0])  # 红色
-
-proj_pcd_p2,ind_p2 = remove_pcd_outlier(proj_pcd_p2_unfilter)
-projected_points_p2 = np.asarray(proj_pcd_p2.points)
-
-colors = np.ones((len(proj_pcd_p2_unfilter.points), 3)) * [1,1,0]
-colors[ind_p2,:] = [1,0,0]
-proj_pcd_p2_unfilter.colors = o3d.utility.Vector3dVector(colors)
-
-# 可视化所有内容
-o3d.visualization.draw_geometries([
-    pcd_orig_j, pcd_orig_i, proj_pcd_p2_unfilter
-    ,
-],window_name="Pair of Planes and Projected Points Between Them")
-
-
-#**************************** Plane 3: find outside(finger) collision area ****************************
-
-# center_i_outside = center_i + (j_pg/2) * (plane_normals[mmm])
-# center_j_outside = center_j + (j_pg/2) * (plane_normals[nnn])
-center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
-center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
-
-# 1. 筛选出在两个平面之间的点
-points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],0.001,False)
-points_between_p3_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3, plane_normals[nnn],0.001,False)
-points_between_p3 = np.vstack((points_between_p3_i, points_between_p3_j))
-
-# 2. 投影到中间平面
-projected_points_p3 = project_points_to_plane(points_between_p3, center_ij, plane_normals[mmm])
-
-# 3. 创建 PointCloud 对象
-proj_pcd_p3_unfilter = o3d.geometry.PointCloud()
-proj_pcd_p3_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3)
-proj_pcd_p3_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
-
-proj_pcd_p3,ind_p3 = remove_pcd_outlier(proj_pcd_p3_unfilter)
-projected_points_p3 = np.asarray(proj_pcd_p3.points)
-
-o3d.io.write_point_cloud("proj_pcd_p3.pcd", proj_pcd_p3)
-
-colors = np.ones((len(proj_pcd_p3_unfilter.points), 3)) * [1,1,0]
-colors[ind_p3,:] = [0,0,1]
-proj_pcd_p3_unfilter.colors = o3d.utility.Vector3dVector(colors)
-
-#平面中心
-# sphere1 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-# sphere1.paint_uniform_color([1, 1, 0])  
-# sphere1.translate(center_i)
-
-# sphere2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-# sphere2.paint_uniform_color([1, 1, 0])  
-# sphere2.translate(center_j)
-
-# sphere3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-# sphere3.paint_uniform_color([0, 1, 1]) 
-# sphere3.translate(center_i_outside)
-
-# sphere4 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
-# sphere4.paint_uniform_color([1, 0, 1])  
-# sphere4.translate(center_j_outside)
-
-# aaaa = o3d.geometry.PointCloud()
-# aaaa.points = o3d.utility.Vector3dVector(np.array(points_between_outside_i+0.0001))
-# aaaa.paint_uniform_color([1, 0, 1])
-# bbbb = o3d.geometry.PointCloud()
-# bbbb.points = o3d.utility.Vector3dVector(np.array(points_between_outside_j+0.0001))
-# bbbb.paint_uniform_color([0, 1, 1])
-# o3d.visualization.draw_geometries([pcd,aaaa,bbbb])
-# 可视化所有内容
-# o3d.visualization.draw_geometries([candidate_TCP_pcd, proj_pcd_outside,sphere1,sphere2,sphere3,sphere4])
-o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3_unfilter.translate([0,0,0.0001])],window_name="Initial TCP & Finger Collision Area (P3)")
-
-##**************************** Plane 4: find beside collision area ****************************
-
-projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
-
-# 3. 创建 PointCloud 对象
-proj_pcd_p4_unfilter = o3d.geometry.PointCloud()
-proj_pcd_p4_unfilter.points = o3d.utility.Vector3dVector(projected_points_p4)
-proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])  # 蓝色
-
-proj_pcd_p4,ind_p4 = remove_pcd_outlier(proj_pcd_p4_unfilter)
-# proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-o3d.io.write_point_cloud("proj_pcd_p4.pcd", proj_pcd_p4)
-projecter_points_p4 = np.asarray(proj_pcd_p4.points)
-
-colors = np.ones((len(proj_pcd_p4_unfilter.points),3)) * [1,1,0]
-colors[ind_p4,:] = [0,1,1]
-proj_pcd_p4_unfilter.colors = o3d.utility.Vector3dVector(colors)
-
-
-points_between_p22 = o3d.geometry.PointCloud()
-points_between_p22.points = o3d.utility.Vector3dVector(points_between_p2)
-points_between_p22.paint_uniform_color([1, 0, 0])  # 红色
-
-points_between_p33 = o3d.geometry.PointCloud()
-points_between_p33.points = o3d.utility.Vector3dVector(points_between_p3)
-points_between_p33.paint_uniform_color([0, 0, 1])  # 蓝色
-
-points_beside_p4 = o3d.geometry.PointCloud()
-points_beside_p4.points = o3d.utility.Vector3dVector(points_beside)
-points_beside_p4.paint_uniform_color([0, 1, 1])  # 黄色
-
-o3d.visualization.draw_geometries([points_between_p22, points_between_p33.translate([0,0,0.0001]), points_beside_p4.translate([0,0,-0.0001])],window_name="P2 P3 P4 in 3D")
-
-
-o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3.translate([0,0,0.0001]), proj_pcd_p4_unfilter.translate([0,0,-0.0001])],window_name="Initial TCP & Finger Collision Area & Robot Collision Area (P4)")
-
-#**************************** P2: Find contours ****************************
-
-def auto_img_scale(pcd,
-                target_px=1000,          # 想让最长边落在~1000 px
-                max_scale=1500,          # 不要比 1500 更大
-                min_scale=200):           # 也别太小，避免过密
-    """
-    根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
-    """
-    dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
-    avg_d  = np.mean(dists)
-    scale = target_px * 0.0015/avg_d
-    return max(min(scale, max_scale), min_scale)
-#-----------------------chat-cv2------------------------
-
-def extract_and_visualize_contour_segments_with_normals(pcd, scale=1500, approx_eps_ratio=0.01):
-    if isinstance(pcd, o3d.geometry.PointCloud):
-        points = np.asarray(pcd.points)
-    elif isinstance(pcd, np.ndarray):
-        print("Find contours Error: Input is not a PointCloud object.")
-        return
-
-    # 1. PCA 主方向（dir1, dir2 构建局部平面）
-    pca = PCA(n_components=3)
-    pca.fit(points)
-    dir1, dir2 = pca.components_[0], pca.components_[1]
-    center = pca.mean_
-
-    # 2. 投影到主平面 (2D)
-    projected_2d = np.dot(points - center, np.vstack([dir1, dir2]).T)
-
-    # 3. 映射到像素图像
-    min_xy = projected_2d.min(axis=0)
-    norm_proj = ((projected_2d - min_xy) * scale).astype(np.int32)
-    canvas_size = norm_proj.max(axis=0) + 10
-    canvas = np.zeros((int(canvas_size[1]), int(canvas_size[0])), dtype=np.uint8)
-    canvas[norm_proj[:, 1], norm_proj[:, 0]] = 255
-
-    # —— 稀疏点连通性增强（轻度）——
-    if np.count_nonzero(canvas) < 1000:
-        k = np.ones((3, 3), np.uint8)
-        canvas = cv2.dilate(canvas, k, iterations=1)
-        canvas = cv2.morphologyEx(canvas, cv2.MORPH_CLOSE, k, iterations=1)
-
-    # 4. 提取并简化轮廓（取最大外轮廓）
-    contours, _ = cv2.findContours(canvas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        print("没有找到轮廓")
-        return
-
-    contour = max(contours, key=cv2.contourArea)  # 关键：不要用 contours[0]
-    peri = cv2.arcLength(contour, True)
-
-    # 给 epsilon 一个像素级下限，避免“简化没了”
-    eps = max(1.0, approx_eps_ratio * peri)
-    approx = cv2.approxPolyDP(contour, eps, True).reshape(-1, 2)
-
-    # 回退机制：简化后点数不足就用原始轮廓
-    if approx.shape[0] < 2:
-        approx = contour.reshape(-1, 2)
-
-    # 还原到投影平面的连续坐标
-    float2d = approx.astype(np.float32) / scale + min_xy
-
-    if float2d.ndim != 2 or float2d.shape[1] != 2 or float2d.shape[0] < 2:
-        print(f"简化后顶点不足或形状异常: {float2d.shape}")
-        return
-
-    # 5. 构建 3D 线段和法线向量
-    line_segments_2d, line_normals_2d = [], []
-    line_segments_3d, line_indices, line_colors, arrow_meshes = [], [], [], []
-
-    # 场景尺度，用于法线箭头长度（2% 的对角尺度）
-    extent = np.ptp(projected_2d, axis=0)  # [dx, dy]
-    arrow_len = 0.02 * float(np.linalg.norm(extent))
-
-    for i in range(len(float2d)):
-        pt1_2d = float2d[i]
-        pt2_2d = float2d[(i + 1) % len(float2d)]  # 闭合
-
-        # 线段方向和法线
-        vec = pt2_2d - pt1_2d
-        length = np.linalg.norm(vec)
-        if length == 0:
-            continue
-        direction = vec / length
-        normal_2d = np.array([-direction[1], direction[0]])
-
-        line_segments_2d.append([pt1_2d, pt2_2d])
-        line_normals_2d.append(normal_2d)
-
-        # 中点和法线终点（2D）
-        mid_2d = (pt1_2d + pt2_2d) / 2
-        normal_end_2d = mid_2d + normal_2d * arrow_len
-
-        # 投影回 3D 空间
-        pt1_3d = center + pt1_2d[0]*dir1 + pt1_2d[1]*dir2
-        pt2_3d = center + pt2_2d[0]*dir1 + pt2_2d[1]*dir2
-        mid_3d = center + mid_2d[0]*dir1 + mid_2d[1]*dir2
-        normal_end_3d = center + normal_end_2d[0]*dir1 + normal_end_2d[1]*dir2
-
-        # 线段添加到 LineSet
-        idx = len(line_segments_3d)
-        line_segments_3d.extend([pt1_3d, pt2_3d])
-        line_indices.append([idx, idx + 1])
-        color = plt.cm.hsv(i / len(float2d))[:3]
-        line_colors.append(color)
-
-        # 法线箭头
-        arrow = o3d.geometry.LineSet(
-            points=o3d.utility.Vector3dVector([mid_3d, normal_end_3d]),
-            lines=o3d.utility.Vector2iVector([[0, 1]])
-        )
-        arrow.colors = o3d.utility.Vector3dVector([[0, 1, 0]])
-        arrow_meshes.append(arrow)
-
-    # 构建所有线段
-    if len(line_indices) == 0:
-        print("没有可视化的线段（可能轮廓太小或被过度简化）")
-        return
-
-    line_set = o3d.geometry.LineSet()
-    line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
-    line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
-    line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
-
-    # 显示点云 + 线段 + 法线箭头
-    o3d.visualization.draw_geometries(
-        [pcd, line_set] + arrow_meshes,
-        window_name="P2 Contour Lines + Normals",
-        width=1280, height=800
-    )
-
-    return line_segments_2d, line_normals_2d, dir1, dir2, center
-
-
-contour_segments_2d_p2 = []
-contour_normals_2d_p2 = []
-contour_segments_2d_p2,contour_normals_2d_p2,dir1,dir2,center = extract_and_visualize_contour_segments_with_normals(proj_pcd_p2, scale=1500, approx_eps_ratio=0.01)
-
-
-# **************************** Find and Show Initial TCP Box & Test Grid Point ****************************
-def generate_grid_by_spacing(segments_2d, normals_2d, depth=0.05, spacing_edge=0.005,spacing_normal=0.005):
-    """
-    每条线段沿法线方向扩展构造矩形，并在其中以 spacing 为间距生成等距网格点。
-    
-    参数：
-        segments_2d: List of (pt1, pt2)，二维线段起止点
-        normals_2d: List of unit normal vectors，每条线段一个
-        depth: 抓取区域宽度（法线方向），单位 m
-        spacing: 网格点间隔（单位 m）
+                matched_A.append(p)
+            else:
+                dismatched_A.append(p)
+
+        if remove == True:
+            pcd_remove_overlap = o3d.geometry.PointCloud()
+            pcd_remove_overlap.points = o3d.utility.Vector3dVector(dismatched_A)
+            pcd_remove_overlap.paint_uniform_color([1, 0, 0])
+
+            return pcd_remove_overlap
+        else:
+            # B 中那些有邻近 A 点的
+            matched_B = []
+            for p in points_B:
+                [_, idx, _] = kdtree_A.search_radius_vector_3d(p, threshold)
+                if len(idx) > 0:
+                    matched_B.append(p)
+
+            A_keep = np.array(matched_A, dtype=float).reshape(-1, 3)
+            B_keep = np.array(matched_B, dtype=float).reshape(-1, 3)
+            if A_keep.size == 0 and B_keep.size == 0:
+                print("\n############################\nThere is no intersection between this pair of planes.\n############################\n")
+                return 2.1
+            else:
+                # 合并重合区域的点
+                overlap_points = A_keep if B_keep.size == 0 else (B_keep if A_keep.size == 0 else np.vstack([A_keep, B_keep]))
+
+            pcd_overlap = o3d.geometry.PointCloud()
+            pcd_overlap.points = o3d.utility.Vector3dVector(overlap_points)
+            pcd_overlap.paint_uniform_color([0, 1, 0])  # 绿色标记
+
+            return pcd_overlap
+
+    overlap_pcd_unfilter = extract_overlap_region(pcd_proj_i, pcd_proj_j, threshold=0.001)
+    if overlap_pcd_unfilter == 2.1:
+        continue
+
+    overlap_pcd,ind_p1 = filter_by_normal_orientation(overlap_pcd_unfilter,plane_normals[mmm])
+    overlap_pcd,ind_p1 = remove_pcd_outlier_statistical(overlap_pcd_unfilter)
+    projected_points_p1 = np.asarray(overlap_pcd.points)
+    o3d.io.write_point_cloud("overlap_pcd.pcd", overlap_pcd)
+
+    colors = np.ones((len(overlap_pcd_unfilter.points), 3)) * [1,1,0]
+    colors[ind_p1,:] = [0,1,0]
+    overlap_pcd_unfilter.colors = o3d.utility.Vector3dVector(colors)
+
+    o3d.visualization.draw_geometries([overlap_pcd_unfilter,pcd_orig_i,pcd_orig_j],window_name="Pair of Planes and Their Overlap Region")
+
+
+    #**************************** Plane 2: Find points between planes ****************************
+    def project_points_to_plane(points, plane_point, plane_normal):
+        v = points - plane_point
+        d = np.dot(v, plane_normal)
+        return points - np.outer(d, plane_normal)
+
+    def select_points_between_planes(pcd, center_i, center_j, plane_normal, margin=0.0005, include_planes=True):
+        """
+        筛选出完整点云中夹在两个平面之间的点
+        """
+
+        if isinstance(pcd, o3d.geometry.PointCloud):
+            points = np.asarray(pcd.points)
+        elif isinstance(pcd, np.ndarray):
+            points = pcd
+        # center_i = plane_i_pts.mean(axis=0)
+        # center_j = plane_j_pts.mean(axis=0)
+
+        # 平面间距离向量（方向需与法向一致）
+        dist_vec = center_j - center_i
+        dist_vec /= np.linalg.norm(dist_vec)
         
-    返回：
-        rectangles: 每个线段对应的矩形（4个点）
-        all_grid_points: 每个矩形中生成的点，List[np.ndarray]
-    """
-    rectangles = []
-    all_grid_points = []
+        # 投影每个点到法向上，得到相对两个平面的距离
+        d_i = np.dot(points - center_i, plane_normal)
+        d_j = np.dot(points - center_j, plane_normal)
 
-    eps=1e-9
-
-    for (pt1, pt2), n in zip(segments_2d, normals_2d):
-        pt1 = np.array(pt1)
-        pt2 = np.array(pt2)
-        n = np.array(n) / np.linalg.norm(n)
-
-        # 线段方向和长度
-        dir_vec = pt2 - pt1
-        seg_len = np.linalg.norm(dir_vec)
-        dir_unit = dir_vec / seg_len
-
-        # 决定方向上的步数
-        num_w = int(np.floor((seg_len-eps) / spacing_edge)+1)
-        start_spacing_edge = (seg_len-(num_w-1)*spacing_edge)/2.0
-        num_d = int(np.floor((depth-eps) / spacing_normal)+1)
-        start_spacing_normal = (depth-(num_d-1)*spacing_normal)/2.0      
-        if num_w < 1 or num_d < 1:
-            continue
-
-        # 构造矩形四个点（逆时针）
-        offset = -n * depth
-        p1 = pt1 + offset
-        p2 = pt2 + offset
-        p3 = pt2
-        p4 = pt1
-        rectangles.append([p1, p2, p3, p4])
-
-        # 在矩形内部生成规则点
-        grid_pts = []
-        for i in range(num_w):
-            for j in range(num_d):
-                alpha = i * spacing_edge + start_spacing_edge
-                beta = j * spacing_normal + start_spacing_normal
-                # alpha = i * spacing_edge
-                # beta = j * spacing_normal
-                pt = p1 + dir_unit * alpha + n * beta
-                grid_pts.append(pt)
-        all_grid_points.append(np.array(grid_pts))
-
-    return rectangles, all_grid_points
-
-def plot_segments_tcpbox_and_grids(segments_2d, rectangles, grid_points):
-    """
-    在2D坐标平面绘制：
-    - 原始线段（蓝色）
-    - 每个线段的矩形区域（绿色虚线）
-    - 矩形内部的规则网格点（红色 x）
-    """
-    fig, ax = plt.subplots(figsize=(6, 6))
-    used_labels = set()  # 追踪已添加的图例标签
-
-    for (pt1, pt2), rect, grids in zip(segments_2d, rectangles, grid_points):
-        # 原始线段
-        lbl = 'Edges of Plane2'
-        if lbl not in used_labels:
-            ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2, label=lbl)
-            used_labels.add(lbl)
+        # 判断点是否在两个平面之间（允许一个 margin 容差）
+        if include_planes:
+            mask = (d_i * d_j <= 0) | (np.abs(d_i) <= margin) | (np.abs(d_j) <= margin)
         else:
-            ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2)
+            mask = (d_i * d_j < 0) & (np.abs(d_i) > margin) & (np.abs(d_j) > margin)
 
-        # 矩形区域（闭合）
-        rect = np.array(rect + [rect[0]])
-        lbl = 'Initial TCP Box'
-        if lbl not in used_labels:
-            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1, label=lbl)
-            used_labels.add(lbl)
+        points_between = points[mask]
+        points_beside = points[~mask]
+        return points_between,points_beside
+
+
+
+
+    # 1. 筛选出在两个平面之间的点
+    points_between_p2,points_beside = select_points_between_planes(pcd, center_i, center_j, plane_normals[mmm])
+
+    # 2. 投影到中间平面
+    projected_points_p2 = project_points_to_plane(points_between_p2, center_ij, plane_normals[mmm])
+
+    # 3. 创建 PointCloud 对象
+    proj_pcd_p2_unfilter = o3d.geometry.PointCloud()
+    proj_pcd_p2_unfilter.points = o3d.utility.Vector3dVector(projected_points_p2)
+    proj_pcd_p2_unfilter.paint_uniform_color([1, 0, 0])  # 红色
+
+    proj_pcd_p2,ind_p2 = remove_pcd_outlier_dbscan(proj_pcd_p2_unfilter)
+    projected_points_p2 = np.asarray(proj_pcd_p2.points)
+
+    colors = np.ones((len(proj_pcd_p2_unfilter.points), 3)) * [1,1,0]
+    colors[ind_p2,:] = [1,0,0]
+    proj_pcd_p2_unfilter.colors = o3d.utility.Vector3dVector(colors)
+
+    # 可视化所有内容
+    o3d.visualization.draw_geometries([
+        pcd_orig_j, pcd_orig_i, proj_pcd_p2_unfilter
+        ,
+    ],window_name="Pair of Planes and Projected Points Between Them")
+
+
+    #**************************** Plane 3: find outside(finger) collision area ****************************
+
+    # center_i_outside = center_i + (j_pg/2) * (plane_normals[mmm])
+    # center_j_outside = center_j + (j_pg/2) * (plane_normals[nnn])
+    center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
+
+    # 1. 筛选出在两个平面之间的点
+    points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],0.001,False)
+    points_between_p3_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3, plane_normals[nnn],0.001,False)
+    points_between_p3 = np.vstack((points_between_p3_i, points_between_p3_j))
+
+    # 2. 投影到中间平面
+    projected_points_p3 = project_points_to_plane(points_between_p3, center_ij, plane_normals[mmm])
+
+    # 3. 创建 PointCloud 对象
+    proj_pcd_p3_unfilter = o3d.geometry.PointCloud()
+    proj_pcd_p3_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3)
+    proj_pcd_p3_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
+
+    proj_pcd_p3,ind_p3 = remove_pcd_outlier_dbscan(proj_pcd_p3_unfilter)
+    projected_points_p3 = np.asarray(proj_pcd_p3.points)
+
+    o3d.io.write_point_cloud("proj_pcd_p3.pcd", proj_pcd_p3)
+
+    colors = np.ones((len(proj_pcd_p3_unfilter.points), 3)) * [1,1,0]
+    colors[ind_p3,:] = [0,0,1]
+    proj_pcd_p3_unfilter.colors = o3d.utility.Vector3dVector(colors)
+
+    #平面中心
+    # sphere1 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+    # sphere1.paint_uniform_color([1, 1, 0])  
+    # sphere1.translate(center_i)
+
+    # sphere2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+    # sphere2.paint_uniform_color([1, 1, 0])  
+    # sphere2.translate(center_j)
+
+    # sphere3 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+    # sphere3.paint_uniform_color([0, 1, 1]) 
+    # sphere3.translate(center_i_outside)
+
+    # sphere4 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
+    # sphere4.paint_uniform_color([1, 0, 1])  
+    # sphere4.translate(center_j_outside)
+
+    # aaaa = o3d.geometry.PointCloud()
+    # aaaa.points = o3d.utility.Vector3dVector(np.array(points_between_outside_i+0.0001))
+    # aaaa.paint_uniform_color([1, 0, 1])
+    # bbbb = o3d.geometry.PointCloud()
+    # bbbb.points = o3d.utility.Vector3dVector(np.array(points_between_outside_j+0.0001))
+    # bbbb.paint_uniform_color([0, 1, 1])
+    # o3d.visualization.draw_geometries([pcd,aaaa,bbbb])
+    # 可视化所有内容
+    # o3d.visualization.draw_geometries([candidate_TCP_pcd, proj_pcd_outside,sphere1,sphere2,sphere3,sphere4])
+    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3_unfilter.translate([0,0,0.0001])],window_name="Initial TCP & Finger Collision Area (P3)")
+
+    ##**************************** Plane 4: find beside collision area ****************************
+
+    projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
+
+    # 3. 创建 PointCloud 对象
+    proj_pcd_p4_unfilter = o3d.geometry.PointCloud()
+    proj_pcd_p4_unfilter.points = o3d.utility.Vector3dVector(projected_points_p4)
+    proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])  # 蓝色
+
+    proj_pcd_p4,ind_p4 = remove_pcd_outlier_dbscan(proj_pcd_p4_unfilter)
+    # proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    o3d.io.write_point_cloud("proj_pcd_p4.pcd", proj_pcd_p4)
+    projecter_points_p4 = np.asarray(proj_pcd_p4.points)
+
+    colors = np.ones((len(proj_pcd_p4_unfilter.points),3)) * [1,1,0]
+    colors[ind_p4,:] = [0,1,1]
+    proj_pcd_p4_unfilter.colors = o3d.utility.Vector3dVector(colors)
+
+
+    points_between_p22 = o3d.geometry.PointCloud()
+    points_between_p22.points = o3d.utility.Vector3dVector(points_between_p2)
+    points_between_p22.paint_uniform_color([1, 0, 0])  # 红色
+
+    points_between_p33 = o3d.geometry.PointCloud()
+    points_between_p33.points = o3d.utility.Vector3dVector(points_between_p3)
+    points_between_p33.paint_uniform_color([0, 0, 1])  # 蓝色
+
+    points_beside_p4 = o3d.geometry.PointCloud()
+    points_beside_p4.points = o3d.utility.Vector3dVector(points_beside)
+    points_beside_p4.paint_uniform_color([0, 1, 1])  # 黄色
+
+    o3d.visualization.draw_geometries([points_between_p22, points_between_p33.translate([0,0,0.0001]), points_beside_p4.translate([0,0,-0.0001])],window_name="P2 P3 P4 in 3D")
+
+
+    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3.translate([0,0,0.0001]), proj_pcd_p4_unfilter.translate([0,0,-0.0001])],window_name="Initial TCP & Finger Collision Area & Robot Collision Area (P4)")
+
+    #**************************** P2: Find contours ****************************
+
+    def auto_img_scale(pcd,
+                    target_px=1000,          # 想让最长边落在~1000 px
+                    max_scale=1500,          # 不要比 1500 更大
+                    min_scale=200):           # 也别太小，避免过密
+        """
+        根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
+        """
+        dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
+        avg_d  = np.mean(dists)
+        scale = target_px * 0.0015/avg_d
+        return max(min(scale, max_scale), min_scale)
+    #-----------------------chat-cv2------------------------
+
+    def extract_and_visualize_contour_segments_with_normals(pcd, scale=1500, approx_eps_ratio=0.01):
+        if isinstance(pcd, o3d.geometry.PointCloud):
+            points = np.asarray(pcd.points)
+        elif isinstance(pcd, np.ndarray):
+            print("Find contours Error: Input is not a PointCloud object.")
+            return
+
+        # 1. PCA 主方向（dir1, dir2 构建局部平面）
+        pca = PCA(n_components=3)
+        pca.fit(points)
+        dir1, dir2 = pca.components_[0], pca.components_[1]
+        center = pca.mean_
+
+        # 2. 投影到主平面 (2D)
+        points = np.dot(points - center, np.vstack([dir1, dir2]).T)
+
+
+        # 转换点为图像坐标
+        img_scale = auto_img_scale(pcd)
+        points_img = np.int32((points - points.min(axis=0)) * img_scale)
+        img_size = points_img.max(axis=0) + 10
+
+        # 创建空白图像并绘制点
+        img = np.zeros((img_size[1], img_size[0]), dtype=np.uint8)
+        for pt in points_img:
+            cv2.circle(img, tuple(pt), 1, 255, -1)
+
+                # ---- 估计点的典型像素间距（用于选核）----
+        # 不依赖第三方：从点图估计一个粗略间距
+        # 方案：对网格下采样或用稀疏度近似，这里用形态学距离的近似方法
+        ys, xs = np.where(img > 0)
+        if len(xs) >= 2:
+            # 取一个小窗口统计最近像素距离（简化版估计）
+            # 也可换成 scipy.spatial.cKDTree 最近邻求中位数像素间距
+            sample = np.random.choice(len(xs), size=min(5000, len(xs)), replace=False)
+            pts = np.stack([xs[sample], ys[sample]], axis=1).astype(np.int32)
+            # 用小半径腐蚀看能否断开，近似推断间距（保守取值）
+            # 简化：用常数兜底
+            px_gap = 3
         else:
-            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1)
+            px_gap = 3
 
-        # 网格点
-        grids = np.array(grids)
-        lbl = 'Test Grid Points'
-        if lbl not in used_labels:
-            ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4, label=lbl)
-            used_labels.add(lbl)
-        else:
-            ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4)
+        # ---- 形态学：先闭运算再开运算 ----
+        # 核大小与点间距挂钩，闭运算弥合空隙，开运算去掉毛刺
+        k = max(3, int(round(px_gap * 2)))      # 闭运算核（越大越“补全”）
+        k_open = max(3, int(round(px_gap * 0.8)))  # 开运算核（轻度去噪）
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        kernel_open  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
 
-    ax.set_aspect('equal')
-    ax.set_title("2D: Edges, TCP Box, and Test Grid Points")
-    ax.grid(True)
-    ax.legend()
-    plt.tight_layout()
-    plt.show()
+        mask = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel_open,  iterations=1)
 
+        # ---- 填洞（确保得到真正的外轮廓）----
+        h, w = mask.shape
+        ff = mask.copy()
+        ff = cv2.copyMakeBorder(ff, 1,1,1,1, cv2.BORDER_CONSTANT, value=0)
+        cv2.floodFill(ff, None, (0,0), 255)                # 从边界外部泛洪
+        ff = ff[1:-1,1:-1]
+        holes = cv2.bitwise_not(ff) & cv2.bitwise_not(mask) # 外部区域
+        filled = cv2.bitwise_or(mask, cv2.bitwise_not(holes))
 
-tcp_box,test_grid_points = generate_grid_by_spacing(contour_segments_2d_p2, contour_normals_2d_p2, depth=b_pg+c_pg, spacing_edge=z_pg/5, spacing_normal=b_pg/5)
-plot_segments_tcpbox_and_grids(contour_segments_2d_p2,tcp_box,test_grid_points)
-
-# Show each TCP Boxes and it's test grid points
-def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
-    """
-    始终显示所有线段，只高亮当前索引对应的矩形与网格点。
-    """
-    all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
-    min_xy = all_pts.min(axis=0) - 0.025
-    max_xy = all_pts.max(axis=0) + 0.025
+        # ---- 去除小连通域（防止孤点影响外轮廓）----
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(filled, connectivity=8)
+        min_area_px = (k * k) * 2  # 面积阈值：跟核相关
+        clean = np.zeros_like(filled)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area_px:
+                clean[labels == i] = 255
 
 
-    for i in range(len(segments_2d)):
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.set_title(f"TCP Box and Test Grid Points for Edges {i+1}/{len(segments_2d)}")
+        # 使用findContours寻找轮廓
+        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 所有线段：蓝色
-        lbl = 'Edges of Plane2'
-        used_labels = set()
-        for j , (pt1, pt2) in enumerate(segments_2d):
+        # 绘制各种轮廓处理结果
+        img_contours = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        for cnt in contours:
+            # 4. 多边形近似（黄色）
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(img_contours, [approx], 0, (0, 255, 255), 2)
 
-            if j == i:
-                mid = (pt1 + pt2) / 2
-                vec_12 = pt2 - pt1
-                vec_12 = vec_12 / np.linalg.norm(vec_12)
-                normal_clockwise_90 = [vec_12[1], -vec_12[0]]
-                normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
+        # 显示轮廓和高级处理结果
+        plt.figure(figsize=(10, 6))
+        plt.imshow(img_contours)
+        plt.title('Contours: Plane 2')
+        plt.axis('off')
+        plt.show()
 
-                #parallel symbol
-                # start_point_line = mid - normal_clockwise_90 * 0.026
-                # end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                # end_point_base1 = end_point_line + vec_12 * 0.005
-                # end_point_base2 = end_point_line - vec_12 * 0.005
-                # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+        # ---- 将轮廓转换回原始坐标空间 ---- #
+        contours_real   = []        # 每个轮廓在 2D 投影坐标系下
+        polygons_2d     = []        # shapely Polygon 列表
+        # contour_points_list = []
+        linesets = []
 
-                #tilt symbol
-                start_point_line = mid - normal_clockwise_90 * 0.018
-                end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
-                end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
-                end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+        for cnt in contours:
+            # 近似多边形轮廓
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
 
-                ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
-                ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
-                ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
-                ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+            # 从图像坐标系转换回投影的二维坐标系
+            points_2d_back = approx.astype(np.float32) / img_scale + points.min(axis=0)
+
+            # 从二维坐标映射回原始三维空间
+            points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
+
+            line_segments_2d, line_normals_2d = [], []
+            line_segments_3d, line_indices, line_colors = [], [], []
+
+            for i in range(len(points_2d_back)):
+                pt1_2d = points_2d_back[i]
+                pt2_2d = points_2d_back[(i + 1) % len(points_2d_back)]  # 闭合
+
+                # 线段方向和法线
+                vec = pt2_2d - pt1_2d
+                length = np.linalg.norm(vec)
+                if length == 0:
+                    continue
+                direction = vec / length
+                normal_2d = np.array([-direction[1], direction[0]])
+
+                line_segments_2d.append([pt1_2d, pt2_2d])
+                line_normals_2d.append(normal_2d)
                 
+
+                # 投影回 3D 空间
+                pt1_3d = center + pt1_2d[0]*dir1 + pt1_2d[1]*dir2
+                pt2_3d = center + pt2_2d[0]*dir1 + pt2_2d[1]*dir2
+
+
+                # 线段添加到 LineSet
+                idx = len(line_segments_3d)
+                line_segments_3d.extend([pt1_3d, pt2_3d])
+                line_indices.append([idx, idx + 1])
+                color = plt.cm.hsv(i / len(points_2d_back))[:3]
+                line_colors.append(color)
+
+            # 构建所有线段
+            if len(line_indices) == 0:
+                print("没有可视化的线段（可能轮廓太小或被过度简化）")
+                return
+
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
+            line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
+            line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
+
+        # 使用Open3D可视化所有轮廓
+        o3d.visualization.draw_geometries([pcd, line_set],window_name="P2 Contour Lines + Normals",width=1280, height=800)
+
+        return line_segments_2d, line_normals_2d, dir1, dir2, center
+
+
+    contour_segments_2d_p2 = []
+    contour_normals_2d_p2 = []
+    contour_segments_2d_p2,contour_normals_2d_p2,dir1,dir2,center = extract_and_visualize_contour_segments_with_normals(proj_pcd_p2, scale=1500, approx_eps_ratio=0.01)
+
+
+    # **************************** Find and Show Initial TCP Box & Test Grid Point ****************************
+    def generate_grid_by_spacing(segments_2d, normals_2d, depth=0.05, spacing_edge=0.005,spacing_normal=0.005):
+        """
+        每条线段沿法线方向扩展构造矩形，并在其中以 spacing 为间距生成等距网格点。
+        
+        参数：
+            segments_2d: List of (pt1, pt2)，二维线段起止点
+            normals_2d: List of unit normal vectors，每条线段一个
+            depth: 抓取区域宽度（法线方向），单位 m
+            spacing: 网格点间隔（单位 m）
+            
+        返回：
+            rectangles: 每个线段对应的矩形（4个点）
+            all_grid_points: 每个矩形中生成的点，List[np.ndarray]
+        """
+        rectangles = []
+        all_grid_points = []
+
+        eps=1e-9
+
+        for (pt1, pt2), n in zip(segments_2d, normals_2d):
+            pt1 = np.array(pt1)
+            pt2 = np.array(pt2)
+            n = np.array(n) / np.linalg.norm(n)
+
+            # 线段方向和长度
+            dir_vec = pt2 - pt1
+            seg_len = np.linalg.norm(dir_vec)
+            dir_unit = dir_vec / seg_len
+
+            # 决定方向上的步数
+            num_w = int(np.floor((seg_len-eps) / spacing_edge)+1)
+            start_spacing_edge = (seg_len-(num_w-1)*spacing_edge)/2.0
+            num_d = int(np.floor((depth-eps) / spacing_normal)+1)
+            start_spacing_normal = (depth-(num_d-1)*spacing_normal)/2.0      
+            if num_w < 1 or num_d < 1:
+                continue
+
+            # 构造矩形四个点（逆时针）
+            offset = -n * depth
+            p1 = pt1 + offset
+            p2 = pt2 + offset
+            p3 = pt2
+            p4 = pt1
+            rectangles.append([p1, p2, p3, p4])
+
+            # 在矩形内部生成规则点
+            grid_pts = []
+            for i in range(num_w):
+                for j in range(num_d):
+                    alpha = i * spacing_edge + start_spacing_edge
+                    beta = j * spacing_normal + start_spacing_normal
+                    # alpha = i * spacing_edge
+                    # beta = j * spacing_normal
+                    pt = p1 + dir_unit * alpha + n * beta
+                    grid_pts.append(pt)
+            all_grid_points.append(np.array(grid_pts))
+
+        return rectangles, all_grid_points
+
+    def plot_segments_tcpbox_and_grids(segments_2d, rectangles, grid_points):
+        """
+        在2D坐标平面绘制：
+        - 原始线段（蓝色）
+        - 每个线段的矩形区域（绿色虚线）
+        - 矩形内部的规则网格点（红色 x）
+        """
+        fig, ax = plt.subplots(figsize=(6, 6))
+        used_labels = set()  # 追踪已添加的图例标签
+
+        for (pt1, pt2), rect, grids in zip(segments_2d, rectangles, grid_points):
+            # 原始线段
+            lbl = 'Edges of Plane2'
             if lbl not in used_labels:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1,label=lbl)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2, label=lbl)
                 used_labels.add(lbl)
             else:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2)
 
+            # 矩形区域（闭合）
+            rect = np.array(rect + [rect[0]])
+            lbl = 'Initial TCP Box'
+            if lbl not in used_labels:
+                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1, label=lbl)
+                used_labels.add(lbl)
+            else:
+                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1)
 
+            # 网格点
+            grids = np.array(grids)
+            lbl = 'Test Grid Points'
+            if lbl not in used_labels:
+                ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4, label=lbl)
+                used_labels.add(lbl)
+            else:
+                ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4)
 
-
-        # 当前的矩形：绿色
-        rect = np.array(rectangles[i] + [rectangles[i][0]])
-        ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='Initial TCP Box')
-
-        # 当前的 grid 点：红色
-        grids = np.array(grid_points[i])
-        if grid_points is not None:
-            ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4, label='Test Grid Points')
-
-        ax.set_xlim(min_xy[0], max_xy[0])
-        ax.set_ylim(min_xy[1], max_xy[1])
         ax.set_aspect('equal')
+        ax.set_title("2D: Edges, TCP Box, and Test Grid Points")
         ax.grid(True)
         ax.legend()
         plt.tight_layout()
         plt.show()
 
 
-highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
+    tcp_box,test_grid_points = generate_grid_by_spacing(contour_segments_2d_p2, contour_normals_2d_p2, depth=b_pg+c_pg, spacing_edge=z_pg/5, spacing_normal=b_pg/5)
+    plot_segments_tcpbox_and_grids(contour_segments_2d_p2,tcp_box,test_grid_points)
+
+    # Show each TCP Boxes and it's test grid points
+    def highlight_segment_rect_grid(segments_2d, rectangles, grid_points):
+        """
+        始终显示所有线段，只高亮当前索引对应的矩形与网格点。
+        """
+        all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
+        min_xy = all_pts.min(axis=0) - 0.025
+        max_xy = all_pts.max(axis=0) + 0.025
 
 
-# Show Gripper Bounding Box
-def create_gripper_bounding_box(grid_points, segments_2d):
+        for i in range(len(segments_2d)):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.set_title(f"TCP Box and Test Grid Points for Edges {i+1}/{len(segments_2d)}")
 
-    all_shapes = []
-    segment_directions = [pt2 - pt1 for pt1, pt2 in segments_2d]
-    segment_middle_point = [(pt1 + pt2) / 2 for pt1, pt2 in segments_2d]
-
-    for pts, seg_dir,mid in zip(grid_points, segment_directions,segment_middle_point):
-        seg_dir = seg_dir / np.linalg.norm(seg_dir)
-        normal = np.array([-seg_dir[1], seg_dir[0]])
-
-        
-        segment_shapes = []
-
-        for pt in pts:
-            pt = np.array(pt)
-            grid_edge_distance = np.dot(mid - pt, normal)
-
-            rectangles = []
-            
-            #Safespace Finger front
-            center1 = pt - normal * (x_pg + rj)
-            p11 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 
-            p12 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
-            p13 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
-            p14 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2
-            rectangles.append([p11, p12, p13, p14])
-
-            #Finger length
-            center2 = pt 
-            p21 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2
-            p22 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
-            p23 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
-            p24 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2
-            rectangles.append([p21, p22, p23, p24])
-
-            #Gripper Base
-            center3 = center2 + normal * (b_pg + c_pg + rj)
-            p31 = center3 + seg_dir * (j_pg + 2*rj)/2 
-            p32 = center3 + seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
-            p33 = center3 - seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
-            p34 = center3 - seg_dir * (j_pg + 2*rj)/2
-            rectangles.append([p31, p32, p33, p34])
-
-            #Robot Arm
-            center4 = center3 + normal * (d_pg + t_pg + u_pg + rj)
-            p41 = center4 + seg_dir * (rd + re + 2*rj)/2
-            p42 = center4 - seg_dir * (rd + re + 2*rj)/2
-            p43 = center4 - seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
-            p44 = center4 + seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
-            rectangles.append([p41, p42, p43, p44])
-
-            #Gripper Area
-            center5 = pt
-            p51 = center5 + seg_dir * (z_pg - 2*rj)/2
-            p52 = center5 + seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)   
-            p53 = center5 - seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)
-            p54 = center5 - seg_dir * (z_pg - 2*rj)/2
-            rectangles.append([p51, p52, p53, p54])
-
-            #Robot Back Space
-            center6 = center4 + normal * (rc + rf + 2*rj)
-            p61 = center6 + seg_dir * (rd + re + 2*rj)/2
-            p62 = center6 + seg_dir * (rd + re + 2*rj)/2 + normal * (grid_edge_distance + x_pg + rj)
-            p63 = center6 - seg_dir * (rd + re + 2*rj)/2 + normal * (grid_edge_distance + x_pg + rj)
-            p64 = center6 - seg_dir * (rd + re + 2*rj)/2
-            rectangles.append([p61, p62, p63, p64])
-
-            segment_shapes.append({
-                'point': pt,
-                'rectangles': rectangles
-            })
-
-        all_shapes.append(segment_shapes)
-
-    return all_shapes
-
-
-def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
-    all_pts = [pt for seg in segments_2d for pt in seg]
-    bounds = np.array(all_pts)
-    min_xy = bounds.min(axis=0) - 0.01
-    max_xy = bounds.max(axis=0) + 0.01
-
-    for i, segment_shape in enumerate(shapes):
-        for j, shape in enumerate(segment_shape):
-            fig, ax = plt.subplots(figsize=(8, 8))
-            ax.set_title(f"Edge {i+1}, Point {j+1}:Bounding Boxes of Gripper and Robot Arm")
-
-            used_labels = set()
-
-            # 所有线段（蓝）
+            # 所有线段：蓝色
             lbl = 'Edges of Plane2'
-            for pt1, pt2 in segments_2d:
+            used_labels = set()
+            for j , (pt1, pt2) in enumerate(segments_2d):
+
+                if j == i:
+                    mid = (pt1 + pt2) / 2
+                    vec_12 = pt2 - pt1
+                    vec_12 = vec_12 / np.linalg.norm(vec_12)
+                    normal_clockwise_90 = [vec_12[1], -vec_12[0]]
+                    normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
+
+                    #parallel symbol
+                    # start_point_line = mid - normal_clockwise_90 * 0.026
+                    # end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                    # end_point_base1 = end_point_line + vec_12 * 0.005
+                    # end_point_base2 = end_point_line - vec_12 * 0.005
+                    # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                    # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                    #tilt symbol
+                    start_point_line = mid - normal_clockwise_90 * 0.018
+                    end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                    end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
+                    end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
+                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                    ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
+                    ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
+                    ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
+                    ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+                    
                 if lbl not in used_labels:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1,label=lbl)
                     used_labels.add(lbl)
                 else:
                     ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
 
-            # 初始矩形
-            rect = np.array(tcp_box[i] + [tcp_box[i][0]])
-            lbl = 'Initial TCP Box'
-            if lbl not in used_labels:
-                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label=lbl)
-                used_labels.add(lbl)
-            else:
-                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2)
 
-            # 当前测试点
-            pt = shape['point']
-            lbl = 'Test Point'
-            if lbl not in used_labels:
-                ax.plot(pt[0], pt[1], 'ro', markersize=4, label=lbl)
-                used_labels.add(lbl)
-            else:
-                ax.plot(pt[0], pt[1], 'ro', markersize=4)
 
-            #6个矩形
-            colors = ['red', 'purple', 'orange','deepskyblue','yellow','limegreen']
-            Box_label = ['Finger Safe Space Box', 'Finger Box', 'Finger Base Box', 'Robot Arm Box','Gripper Area Box','Robot Back Space Box']
-            for k, rect in enumerate(shape['rectangles']):
-                poly = np.array(rect + [rect[0]])
-                lbl = Box_label[k]
-                if lbl not in used_labels:
-                    ax.plot(poly[:, 0], poly[:, 1], color=colors[k], linewidth=1.5, label=lbl)
-                    used_labels.add(lbl)
-                else:
-                    ax.plot(poly[:, 0], poly[:, 1], color=colors[k], linewidth=1.5)
 
-            # 梯形
-            # trap = np.array(shape['trapezoid'] + [shape['trapezoid'][0]])
-            # lbl = 'Robot Arm'
-            # if lbl not in used_labels:
-            #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2, label=lbl)
-            #     used_labels.add(lbl)
-            # else:
-            #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2)
+            # 当前的矩形：绿色
+            rect = np.array(rectangles[i] + [rectangles[i][0]])
+            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='Initial TCP Box')
+
+            # 当前的 grid 点：红色
+            grids = np.array(grid_points[i])
+            if grid_points is not None:
+                ax.plot(grids[:, 0], grids[:, 1], 'rx', markersize=4, label='Test Grid Points')
 
             ax.set_xlim(min_xy[0], max_xy[0])
             ax.set_ylim(min_xy[1], max_xy[1])
@@ -1276,332 +1230,526 @@ def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
             plt.tight_layout()
             plt.show()
 
-points_and_gripper_bounding_box = create_gripper_bounding_box(test_grid_points, contour_segments_2d_p2)
-# show_gripper_bounding_box(contour_segments_2d_p2,tcp_box,points_and_gripper_bounding_box)
+
+    highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
 
 
+    # Show Gripper Bounding Box
+    def create_gripper_bounding_box(grid_points, segments_2d):
 
-#************************ Project P134 to 2 (CV2) **********************
+        all_shapes = []
+        segment_directions = [pt2 - pt1 for pt1, pt2 in segments_2d]
+        segment_middle_point = [(pt1 + pt2) / 2 for pt1, pt2 in segments_2d]
 
+        for pts, seg_dir,mid in zip(grid_points, segment_directions,segment_middle_point):
+            seg_dir = seg_dir / np.linalg.norm(seg_dir)
+            normal = np.array([-seg_dir[1], seg_dir[0]])
 
-#*******************************
-
-
-
-
-
-def get_plane_contour_polygon(pcd,dir1,dir2,center):
-
-    if pcd.is_empty():
-        return Polygon()
-
-    points = np.asarray(pcd.points)
-
-    if points.size == 0:
-        return Polygon()
-
-    # 2. 投影到主平面 (2D)
-    points = np.dot(points - center, np.vstack([dir1, dir2]).T)
-
-
-    # 转换点为图像坐标
-    img_scale = auto_img_scale(pcd)
-    points_img = np.int32((points - points.min(axis=0)) * img_scale)
-    img_size = points_img.max(axis=0) + 10
-
-    # 创建空白图像并绘制点
-    img = np.zeros((img_size[1], img_size[0]), dtype=np.uint8)
-    for pt in points_img:
-        cv2.circle(img, tuple(pt), 1, 255, -1)
-
-    # 使用findContours寻找轮廓
-    contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # 绘制各种轮廓处理结果
-    img_contours = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    for cnt in contours:
-        # 4. 多边形近似（黄色）
-        epsilon = 0.01 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True)
-        cv2.drawContours(img_contours, [approx], 0, (0, 255, 255), 2)
-
-    # 显示轮廓和高级处理结果
-    plt.figure(figsize=(10, 6))
-    plt.imshow(img_contours)
-    plt.title('Contours: Rect (Green), RotRect (Blue), Hull (Red), ApproxPoly (Yellow)')
-    plt.axis('off')
-    plt.show()
-
-
-
-
-    # ---- 将轮廓转换回原始坐标空间 ---- #
-    contours_real   = []        # 每个轮廓在 2D 投影坐标系下
-    polygons_2d     = []        # shapely Polygon 列表
-    # contour_points_list = []
-    linesets = []
-
-    for cnt in contours:
-        # 近似多边形轮廓
-        epsilon = 0.01 * cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
-
-        # 从图像坐标系转换回投影的二维坐标系
-        points_2d_back = approx.astype(np.float32) / img_scale + points.min(axis=0)
-
-        # 从二维坐标映射回原始三维空间
-        points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
-
-        contours_real.append(points_2d_back)
-        polygons_2d.append(Polygon(points_2d_back))
-        # contour_points_list.append(points_3d)
-
-        # 构造Open3D LineSet对象
-        num_points = points_3d.shape[0]
-        lines = [[i, (i+1)%num_points] for i in range(num_points)]
-
-        colors = [[1, 0, 0] for _ in lines]  # 红色线条
-
-        line_set = o3d.geometry.LineSet()
-        line_set.points = o3d.utility.Vector3dVector(points_3d)
-        line_set.lines = o3d.utility.Vector2iVector(lines)
-        line_set.colors = o3d.utility.Vector3dVector(colors)
-
-        linesets.append(line_set)
-
-    # 原始点云设置颜色便于观察
-    pcd.paint_uniform_color([0.5, 0.5, 0.5])
-
-    # 使用Open3D可视化所有轮廓
-    o3d.visualization.draw_geometries([pcd, *linesets])
-
-
-
-
-
-    # 轮廓转回真实二维坐标
-    # contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
-    # poly_contour = Polygon(contour_real)
-
-    # 判断点是否在轮廓内
-    test_point = (0.0, 0.02)
-    # is_inside = polygons_2d.contains(Point(test_point))
-    # print(f"点{test_point}是否位于轮廓内：{is_inside}")
-    is_inside = any(poly.contains(Point(test_point)) for poly in polygons_2d)
-    print(f"点 {test_point} 是否位于某个轮廓内：{is_inside}")
-
-    # 计算相交面积（实际单位）
-    intersection_areas = []
-    rect_real = np.array([[-0.05,-0.01], [0.05,-0.01], [0.05,-0.05], [-0.05,-0.05]])
-    poly_rect = Polygon(rect_real)
-
-    for idx, poly in enumerate(polygons_2d):
-        intersection = poly.intersection(poly_rect)
-        area = intersection.area
-        intersection_areas.append(area)
-    print(f"最大相交面积：{max(intersection_areas)*1e4:.2f} cm^2")
-    # intersection_area = polygons_2d.intersection(poly_rect).area
-    # print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
-
-
-    # ---开始绘图---
-    plt.figure(figsize=(10, 8))
-
-    # 1. 绘制原始点云
-    plt.scatter(points[:, 0], points[:, 1], s=2, color='blue', alpha=0.5, label='Pointcloud')
-
-    # 2. 绘制轮廓（红色）
-    used_labels = set()
-    lbl = 'Contour'
-    for contour_real in contours_real:
-        if lbl not in used_labels:
-            contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
-            plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2,label=lbl)
-            used_labels.add(lbl)
-        else:
-            contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
-            plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2)
-
-    # 3. 绘制测试点
-    point_color = 'green' if is_inside else 'red'
-    plt.scatter(*test_point, color=point_color, s=100, marker='*', label='Test TCP Point')
-
-    # 4. 绘制矩形
-    rect_plot = np.vstack([rect_real, rect_real[0]])  # 闭合矩形
-    plt.plot(rect_plot[:,0], rect_plot[:,1], color='purple', linewidth=2, linestyle='--', label='Test Gripper Bounding Box')
-
-    # 额外标注面积结果
-    centroid = poly_rect.centroid.coords[0]
-    plt.text(centroid[0], centroid[1], f'Area={(max(intersection_areas)*1e4):.2f}', color='purple', fontsize=12, ha='center')
-
-    # 设置其他显示选项
-    plt.title('Pointcloud, Contour, Test TCP Point, and Test Gripper Bounding Box')
-    plt.xlabel('X')
-    plt.ylabel('Y')
-    plt.legend(loc='best')
-    plt.axis('equal')
-    plt.grid(True)
-
-    plt.show()
-
-    return polygons_2d
-
-plane_contour_polygon_list = [
-    get_plane_contour_polygon(overlap_pcd,dir1,dir2,center),
-    get_plane_contour_polygon(proj_pcd_p2,dir1,dir2,center),
-    get_plane_contour_polygon(proj_pcd_p3,dir1,dir2,center),
-    get_plane_contour_polygon(proj_pcd_p4,dir1,dir2,center),
-    ]
-
-# plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
-
-#********************** Loop Find feasible TCP *********************
-def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
-
-    filtered_shapes = []
-    point = []
-    min_area = 0.3 * z_pg * b_pg
-
-    for segment_shapes in all_shapes:
-        filtered_segment = []
-        point_1 = []
-        for shape in segment_shapes:
-            pt = shape['point']
-            rectangles = shape['rectangles']
             
-            point_geom = Point(pt)
-            rect1_geom = Polygon(rectangles[0])  # Finger tip Safe Space
-            rect2_geom = Polygon(rectangles[1])  # Finger length
-            rect3_geom = Polygon(rectangles[2])  # Gripper Base
-            rect4_geom = Polygon(rectangles[3])  # Robot arm 
-            rect5_geom = Polygon(rectangles[4])  # Gripper Area
-            rect6_geom = Polygon(rectangles[5])  # ?????Box
+            segment_shapes = []
 
-            for i in range(4):
-                lst = plane_contour_polygon_list[i]
-                if isinstance(lst, Polygon):
-                    plane_contour_polygon_list[i] = [lst]
+            for pt in pts:
+                pt = np.array(pt)
+                grid_edge_distance = np.dot(mid - pt, normal)
 
-            poly_0_list = plane_contour_polygon_list[0]
-            poly_1_list = plane_contour_polygon_list[1]
-            poly_2_list = plane_contour_polygon_list[2]
-            poly_3_list = plane_contour_polygon_list[3]
-
-            # condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
-            condition_2 = any(poly.intersection(rect5_geom).area > min_area for poly in poly_0_list)
-            condition_3 = all(
-                not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
-                for poly in poly_1_list
-            )
-            condition_4 = all(
-                not poly.intersects(rect1_geom) and
-                not poly.intersects(rect2_geom) and
-                not poly.intersects(rect3_geom) and
-                not poly.intersects(rect4_geom)
-                for poly in poly_2_list
-            )
-            condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_3_list)
-
-            if  condition_2 and condition_3 and condition_4 and condition_5:
-                filtered_segment.append(shape)
-                point_1.append(pt)
-            # if condition_1 :
-            #     filtered_segment.append(shape)
-            #     point_1.append(pt)                
-
-        filtered_shapes.append(filtered_segment)
-        point.append(point_1)
-
-    return filtered_shapes,point
-
-
-feasible_TCP_and_shapes,feasible_TCP = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
-# feasible_TCP = [shape['point'] for segment in feasible_TCP_and_shapes for shape in segment]
-
-# highlight_segment_rect_grid(contour_segments_2d_p2,tcp_box,feasible_TCP)
-
-
-def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
-    """
-    遍历 filtered_shapes 中的每组 shape，依次高亮展示：
-    - 所有线段（蓝色）
-    - 当前点的 TCP 矩形（绿色）
-    - 当前点坐标（红色）
-
-    参数：
-    - filtered_shapes: List[List[dict]]，每个 shape 包含 point, rectangles
-    - segments_2d: List of 2D line segments [(pt1, pt2), ...]
-    - rectangles_per_shape: 同 filtered_shapes 结构，用于提供 TCP box（rectangles[0]）
-    """
-
-    all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
-    min_xy = all_pts.min(axis=0) - 0.02
-    max_xy = all_pts.max(axis=0) + 0.02
-
-
-    for i,pt in enumerate(TCP_points):
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.set_title(f"Edge {i+1}: Feasible TCP and TCP Box")
-
-        # 所有线段：蓝色
-        used_labels = set()
-        lbl = 'Coutours of Plane'
-        for j, (pt1, pt2) in enumerate(segments_2d):
-
-            if j == i:
-                mid = (pt1 + pt2) / 2
-                vec_12 = pt2 - pt1
-                vec_12 = vec_12 / np.linalg.norm(vec_12)
-                normal_clockwise_90 = [vec_12[1], -vec_12[0]]
-                normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
-
-                #parallel symbol
-                # start_point_line = mid - normal_clockwise_90 * 0.026
-                # end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                # end_point_base1 = end_point_line + vec_12 * 0.005
-                # end_point_base2 = end_point_line - vec_12 * 0.005
-                # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
-
-                #tilt symbol
-                start_point_line = mid - normal_clockwise_90 * 0.018
-                end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
-                end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
-                end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
-
-                ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
-                ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
-                ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
-                ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+                rectangles = []
                 
-            if lbl not in used_labels:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
-                used_labels.add(lbl)
-            else:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+                #Safespace Finger front
+                center1 = pt - normal * (x_pg + rj)
+                p11 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 
+                p12 = center1 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
+                p13 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (x_pg + rj)
+                p14 = center1 - seg_dir * (e_pg + 2*(i_pg + rj))/2
+                rectangles.append([p11, p12, p13, p14])
 
-        # 当前点：绿色点
-        pt = np.array(pt).reshape(-1, 2)
-        # print(pt.shape)          # 看维度
-        # print(pt.ndim)
-        if pt.size:
-            ax.plot(pt[:,0], pt[:,1],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')
+                #Finger length
+                center2 = pt 
+                p21 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2
+                p22 = center2 + seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
+                p23 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2 + normal * (b_pg + c_pg + rj)
+                p24 = center2 - seg_dir * (e_pg + 2*(i_pg + rj))/2
+                rectangles.append([p21, p22, p23, p24])
+
+                #Gripper Base
+                center3 = center2 + normal * (b_pg + c_pg + rj)
+                p31 = center3 + seg_dir * (j_pg + 2*rj)/2 
+                p32 = center3 + seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
+                p33 = center3 - seg_dir * (j_pg + 2*rj)/2 + normal * (d_pg + t_pg + u_pg + rj)
+                p34 = center3 - seg_dir * (j_pg + 2*rj)/2
+                rectangles.append([p31, p32, p33, p34])
+
+                #Robot Arm
+                center4 = center3 + normal * (d_pg + t_pg + u_pg + rj)
+                p41 = center4 + seg_dir * (rd + re + 2*rj)/2
+                p42 = center4 - seg_dir * (rd + re + 2*rj)/2
+                p43 = center4 - seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
+                p44 = center4 + seg_dir * (rd + re + 2*rj)/2 + normal * (rc + rf + 2*rj)
+                rectangles.append([p41, p42, p43, p44])
+
+                #Gripper Area
+                center5 = pt
+                p51 = center5 + seg_dir * (z_pg - 2*rj)/2
+                p52 = center5 + seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)   
+                p53 = center5 - seg_dir * (z_pg - 2*rj)/2 + normal * (b_pg - 2*rj)
+                p54 = center5 - seg_dir * (z_pg - 2*rj)/2
+                rectangles.append([p51, p52, p53, p54])
+
+                #Robot Back Space
+                center6 = center4 + normal * (rc + rf + 2*rj)
+                p61 = center6 + seg_dir * (rd + re + 2*rj)/2
+                p62 = center6 + seg_dir * (rd + re + 2*rj)/2 + normal * (grid_edge_distance + x_pg + rj)
+                p63 = center6 - seg_dir * (rd + re + 2*rj)/2 + normal * (grid_edge_distance + x_pg + rj)
+                p64 = center6 - seg_dir * (rd + re + 2*rj)/2
+                rectangles.append([p61, p62, p63, p64])
+
+                segment_shapes.append({
+                    'point': pt,
+                    'rectangles': rectangles
+                })
+
+            all_shapes.append(segment_shapes)
+
+        return all_shapes
+
+
+    def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
+        all_pts = [pt for seg in segments_2d for pt in seg]
+        bounds = np.array(all_pts)
+        min_xy = bounds.min(axis=0) - 0.01
+        max_xy = bounds.max(axis=0) + 0.01
+
+        for i, segment_shape in enumerate(shapes):
+            for j, shape in enumerate(segment_shape):
+                fig, ax = plt.subplots(figsize=(8, 8))
+                ax.set_title(f"Edge {i+1}, Point {j+1}:Bounding Boxes of Gripper and Robot Arm")
+
+                used_labels = set()
+
+                # 所有线段（蓝）
+                lbl = 'Edges of Plane2'
+                for pt1, pt2 in segments_2d:
+                    if lbl not in used_labels:
+                        ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
+                        used_labels.add(lbl)
+                    else:
+                        ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+
+                # 初始矩形
+                rect = np.array(tcp_box[i] + [tcp_box[i][0]])
+                lbl = 'Initial TCP Box'
+                if lbl not in used_labels:
+                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label=lbl)
+                    used_labels.add(lbl)
+                else:
+                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2)
+
+                # 当前测试点
+                pt = shape['point']
+                lbl = 'Test Point'
+                if lbl not in used_labels:
+                    ax.plot(pt[0], pt[1], 'ro', markersize=4, label=lbl)
+                    used_labels.add(lbl)
+                else:
+                    ax.plot(pt[0], pt[1], 'ro', markersize=4)
+
+                #6个矩形
+                colors = ['red', 'purple', 'orange','deepskyblue','yellow','limegreen']
+                Box_label = ['Finger Safe Space Box', 'Finger Box', 'Finger Base Box', 'Robot Arm Box','Gripper Area Box','Robot Back Space Box']
+                for k, rect in enumerate(shape['rectangles']):
+                    poly = np.array(rect + [rect[0]])
+                    lbl = Box_label[k]
+                    if lbl not in used_labels:
+                        ax.plot(poly[:, 0], poly[:, 1], color=colors[k], linewidth=1.5, label=lbl)
+                        used_labels.add(lbl)
+                    else:
+                        ax.plot(poly[:, 0], poly[:, 1], color=colors[k], linewidth=1.5)
+
+                # 梯形
+                # trap = np.array(shape['trapezoid'] + [shape['trapezoid'][0]])
+                # lbl = 'Robot Arm'
+                # if lbl not in used_labels:
+                #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2, label=lbl)
+                #     used_labels.add(lbl)
+                # else:
+                #     ax.plot(trap[:, 0], trap[:, 1], color='deepskyblue', linestyle='--', linewidth=1.2)
+
+                ax.set_xlim(min_xy[0], max_xy[0])
+                ax.set_ylim(min_xy[1], max_xy[1])
+                ax.set_aspect('equal')
+                ax.grid(True)
+                ax.legend()
+                plt.tight_layout()
+                plt.show()
+
+    points_and_gripper_bounding_box = create_gripper_bounding_box(test_grid_points, contour_segments_2d_p2)
+    # show_gripper_bounding_box(contour_segments_2d_p2,tcp_box,points_and_gripper_bounding_box)
+
+
+
+    #************************ Project P134 to 2 (CV2) **********************
+
+
+    #*******************************
+
+
+
+
+
+    def get_plane_contour_polygon(pcd,dir1,dir2,center):
+
+        if pcd.is_empty():
+            return Polygon()
+
+        points = np.asarray(pcd.points)
+
+        if points.size == 0:
+            return Polygon()
+
+        # 2. 投影到主平面 (2D)
+        points = np.dot(points - center, np.vstack([dir1, dir2]).T)
+
+
+        # 转换点为图像坐标
+        img_scale = auto_img_scale(pcd)
+        points_img = np.int32((points - points.min(axis=0)) * img_scale)
+        img_size = points_img.max(axis=0) + 10
+
+        # 创建空白图像并绘制点
+        img = np.zeros((img_size[1], img_size[0]), dtype=np.uint8)
+        for pt in points_img:
+            cv2.circle(img, tuple(pt), 1, 255, -1)
+
+                # ---- 估计点的典型像素间距（用于选核）----
+        # 不依赖第三方：从点图估计一个粗略间距
+        # 方案：对网格下采样或用稀疏度近似，这里用形态学距离的近似方法
+        ys, xs = np.where(img > 0)
+        if len(xs) >= 2:
+            # 取一个小窗口统计最近像素距离（简化版估计）
+            # 也可换成 scipy.spatial.cKDTree 最近邻求中位数像素间距
+            sample = np.random.choice(len(xs), size=min(5000, len(xs)), replace=False)
+            pts = np.stack([xs[sample], ys[sample]], axis=1).astype(np.int32)
+            # 用小半径腐蚀看能否断开，近似推断间距（保守取值）
+            # 简化：用常数兜底
+            px_gap = 3
         else:
-            print("No feasible TCP point found!")
-            ax.plot([], [],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')                
+            px_gap = 3
 
-        # 当前矩形框（rectangles[0]）：绿色虚线框
-        rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
-        ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
+        # ---- 形态学：先闭运算再开运算 ----
+        # 核大小与点间距挂钩，闭运算弥合空隙，开运算去掉毛刺
+        k = max(3, int(round(px_gap * 2)))      # 闭运算核（越大越“补全”）
+        k_open = max(3, int(round(px_gap * 0.8)))  # 开运算核（轻度去噪）
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        kernel_open  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
 
-        ax.set_xlim(min_xy[0], max_xy[0])
-        ax.set_ylim(min_xy[1], max_xy[1])
-        ax.set_aspect('equal')
-        ax.grid(True)
-        ax.legend()
-        plt.tight_layout()
+        mask = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel_open,  iterations=1)
+
+        # ---- 填洞（确保得到真正的外轮廓）----
+        h, w = mask.shape
+        ff = mask.copy()
+        ff = cv2.copyMakeBorder(ff, 1,1,1,1, cv2.BORDER_CONSTANT, value=0)
+        cv2.floodFill(ff, None, (0,0), 255)                # 从边界外部泛洪
+        ff = ff[1:-1,1:-1]
+        holes = cv2.bitwise_not(ff) & cv2.bitwise_not(mask) # 外部区域
+        filled = cv2.bitwise_or(mask, cv2.bitwise_not(holes))
+
+        # ---- 去除小连通域（防止孤点影响外轮廓）----
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(filled, connectivity=8)
+        min_area_px = (k * k) * 2  # 面积阈值：跟核相关
+        clean = np.zeros_like(filled)
+        for i in range(1, num):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area_px:
+                clean[labels == i] = 255
+
+
+        # 使用findContours寻找轮廓
+        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # 绘制各种轮廓处理结果
+        img_contours = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        for cnt in contours:
+            # 4. 多边形近似（黄色）
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(img_contours, [approx], 0, (0, 255, 255), 2)
+
+        # 显示轮廓和高级处理结果
+        plt.figure(figsize=(10, 6))
+        plt.imshow(img_contours)
+        plt.title('Contours: Rect (Green), RotRect (Blue), Hull (Red), ApproxPoly (Yellow)')
+        plt.axis('off')
         plt.show()
 
-highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
+
+
+
+        # ---- 将轮廓转换回原始坐标空间 ---- #
+        contours_real   = []        # 每个轮廓在 2D 投影坐标系下
+        polygons_2d     = []        # shapely Polygon 列表
+        # contour_points_list = []
+        linesets = []
+
+        for cnt in contours:
+            # 近似多边形轮廓
+            epsilon = 0.01 * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2)
+
+            # 从图像坐标系转换回投影的二维坐标系
+            points_2d_back = approx.astype(np.float32) / img_scale + points.min(axis=0)
+
+            # 从二维坐标映射回原始三维空间
+            points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
+
+            contours_real.append(points_2d_back)
+            polygons_2d.append(Polygon(points_2d_back))
+            # contour_points_list.append(points_3d)
+
+            # 构造Open3D LineSet对象
+            num_points = points_3d.shape[0]
+            lines = [[i, (i+1)%num_points] for i in range(num_points)]
+
+            colors = [[1, 0, 0] for _ in lines]  # 红色线条
+
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(points_3d)
+            line_set.lines = o3d.utility.Vector2iVector(lines)
+            line_set.colors = o3d.utility.Vector3dVector(colors)
+
+            linesets.append(line_set)
+
+        # 原始点云设置颜色便于观察
+        pcd.paint_uniform_color([0.5, 0.5, 0.5])
+
+        # 使用Open3D可视化所有轮廓
+        o3d.visualization.draw_geometries([pcd, *linesets])
+
+
+
+
+
+        # 轮廓转回真实二维坐标
+        # contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
+        # poly_contour = Polygon(contour_real)
+
+        # 判断点是否在轮廓内
+        test_point = (0.0, 0.02)
+        # is_inside = polygons_2d.contains(Point(test_point))
+        # print(f"点{test_point}是否位于轮廓内：{is_inside}")
+        is_inside = any(poly.contains(Point(test_point)) for poly in polygons_2d)
+        print(f"点 {test_point} 是否位于某个轮廓内：{is_inside}")
+
+        # 计算相交面积（实际单位）
+        intersection_areas = []
+        rect_real = np.array([[-0.05,-0.01], [0.05,-0.01], [0.05,-0.05], [-0.05,-0.05]])
+        poly_rect = Polygon(rect_real)
+
+        for idx, poly in enumerate(polygons_2d):
+            intersection = poly.intersection(poly_rect)
+            area = intersection.area
+            intersection_areas.append(area)
+        print(f"最大相交面积：{max(intersection_areas)*1e4:.2f} cm^2")
+        # intersection_area = polygons_2d.intersection(poly_rect).area
+        # print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
+
+
+        # ---开始绘图---
+        plt.figure(figsize=(10, 8))
+
+        # 1. 绘制原始点云
+        plt.scatter(points[:, 0], points[:, 1], s=2, color='blue', alpha=0.5, label='Pointcloud')
+
+        # 2. 绘制轮廓（红色）
+        used_labels = set()
+        lbl = 'Contour'
+        for contour_real in contours_real:
+            if lbl not in used_labels:
+                contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+                plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2,label=lbl)
+                used_labels.add(lbl)
+            else:
+                contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+                plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2)
+
+        # 3. 绘制测试点
+        point_color = 'green' if is_inside else 'red'
+        plt.scatter(*test_point, color=point_color, s=100, marker='*', label='Test TCP Point')
+
+        # 4. 绘制矩形
+        rect_plot = np.vstack([rect_real, rect_real[0]])  # 闭合矩形
+        plt.plot(rect_plot[:,0], rect_plot[:,1], color='purple', linewidth=2, linestyle='--', label='Test Gripper Bounding Box')
+
+        # 额外标注面积结果
+        centroid = poly_rect.centroid.coords[0]
+        plt.text(centroid[0], centroid[1], f'Area={(max(intersection_areas)*1e4):.2f}', color='purple', fontsize=12, ha='center')
+
+        # 设置其他显示选项
+        plt.title('Pointcloud, Contour, Test TCP Point, and Test Gripper Bounding Box')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.legend(loc='best')
+        plt.axis('equal')
+        plt.grid(True)
+
+        plt.show()
+
+        return polygons_2d
+
+    plane_contour_polygon_list = [
+        get_plane_contour_polygon(overlap_pcd,dir1,dir2,center),
+        get_plane_contour_polygon(proj_pcd_p2,dir1,dir2,center),
+        get_plane_contour_polygon(proj_pcd_p3,dir1,dir2,center),
+        get_plane_contour_polygon(proj_pcd_p4,dir1,dir2,center),
+        ]
+
+    # plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
+
+    #********************** Loop Find feasible TCP *********************
+    def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
+
+        filtered_shapes = []
+        point = []
+        min_area = 0.3 * z_pg * b_pg
+
+        for segment_shapes in all_shapes:
+            filtered_segment = []
+            point_1 = []
+            for shape in segment_shapes:
+                pt = shape['point']
+                rectangles = shape['rectangles']
+                
+                point_geom = Point(pt)
+                rect1_geom = Polygon(rectangles[0])  # Finger tip Safe Space
+                rect2_geom = Polygon(rectangles[1])  # Finger length
+                rect3_geom = Polygon(rectangles[2])  # Gripper Base
+                rect4_geom = Polygon(rectangles[3])  # Robot arm 
+                rect5_geom = Polygon(rectangles[4])  # Gripper Area
+                rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
+
+                for i in range(4):
+                    lst = plane_contour_polygon_list[i]
+                    if isinstance(lst, Polygon):
+                        plane_contour_polygon_list[i] = [lst]
+
+                poly_0_list = plane_contour_polygon_list[0]
+                poly_1_list = plane_contour_polygon_list[1]
+                poly_2_list = plane_contour_polygon_list[2]
+                poly_3_list = plane_contour_polygon_list[3]
+
+                # condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
+                condition_2 = any(poly.intersection(rect5_geom).area > min_area for poly in poly_0_list)
+                condition_3 = all(
+                    not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
+                    for poly in poly_1_list
+                )
+                condition_4 = all(
+                    not poly.intersects(rect1_geom) and
+                    not poly.intersects(rect2_geom) and
+                    not poly.intersects(rect3_geom) and
+                    not poly.intersects(rect4_geom)
+                    for poly in poly_2_list
+                )
+                condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_3_list)
+
+                if  condition_2 and condition_3 and condition_4 and condition_5:
+                    filtered_segment.append(shape)
+                    point_1.append(pt)
+                # if condition_1 :
+                #     filtered_segment.append(shape)
+                #     point_1.append(pt)                
+
+            filtered_shapes.append(filtered_segment)
+            point.append(point_1)
+
+        return filtered_shapes,point
+
+
+    feasible_TCP_and_shapes,feasible_TCP = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
+    # feasible_TCP = [shape['point'] for segment in feasible_TCP_and_shapes for shape in segment]
+
+    # highlight_segment_rect_grid(contour_segments_2d_p2,tcp_box,feasible_TCP)
+
+
+    def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
+        """
+        遍历 filtered_shapes 中的每组 shape，依次高亮展示：
+        - 所有线段（蓝色）
+        - 当前点的 TCP 矩形（绿色）
+        - 当前点坐标（红色）
+
+        参数：
+        - filtered_shapes: List[List[dict]]，每个 shape 包含 point, rectangles
+        - segments_2d: List of 2D line segments [(pt1, pt2), ...]
+        - rectangles_per_shape: 同 filtered_shapes 结构，用于提供 TCP box（rectangles[0]）
+        """
+
+        all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
+        min_xy = all_pts.min(axis=0) - 0.02
+        max_xy = all_pts.max(axis=0) + 0.02
+
+
+        for i,pt in enumerate(TCP_points):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.set_title(f"Edge {i+1}: Feasible TCP and TCP Box")
+
+            # 所有线段：蓝色
+            used_labels = set()
+            lbl = 'Coutours of Plane'
+            for j, (pt1, pt2) in enumerate(segments_2d):
+
+                if j == i:
+                    mid = (pt1 + pt2) / 2
+                    vec_12 = pt2 - pt1
+                    vec_12 = vec_12 / np.linalg.norm(vec_12)
+                    normal_clockwise_90 = [vec_12[1], -vec_12[0]]
+                    normal_clockwise_90 = normal_clockwise_90 / np.linalg.norm(normal_clockwise_90)
+
+                    #parallel symbol
+                    # start_point_line = mid - normal_clockwise_90 * 0.026
+                    # end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                    # end_point_base1 = end_point_line + vec_12 * 0.005
+                    # end_point_base2 = end_point_line - vec_12 * 0.005
+                    # end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                    # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                    #tilt symbol
+                    start_point_line = mid - normal_clockwise_90 * 0.018
+                    end_point_line = start_point_line + normal_clockwise_90 * 0.015
+                    end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
+                    end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
+                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
+                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+
+                    ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
+                    ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
+                    ax.plot([end_point_base1[0], end_point_finger1[0]], [end_point_base1[1], end_point_finger1[1]], 'm', linewidth=1.5)
+                    ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
+                    
+                if lbl not in used_labels:
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
+                    used_labels.add(lbl)
+                else:
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+
+            # 当前点：绿色点
+            pt = np.array(pt).reshape(-1, 2)
+            # print(pt.shape)          # 看维度
+            # print(pt.ndim)
+            if pt.size:
+                ax.plot(pt[:,0], pt[:,1],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')
+            else:
+                print("No feasible TCP point found!")
+                ax.plot([], [],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')                
+
+            # 当前矩形框（rectangles[0]）：绿色虚线框
+            rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
+            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
+
+            ax.set_xlim(min_xy[0], max_xy[0])
+            ax.set_ylim(min_xy[1], max_xy[1])
+            ax.set_aspect('equal')
+            ax.grid(True)
+            ax.legend()
+            plt.tight_layout()
+            plt.show()
+
+    highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
