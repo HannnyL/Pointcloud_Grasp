@@ -12,6 +12,7 @@ import math
 import alphashape
 from shapely.geometry import Point, MultiPoint,Polygon,MultiLineString, MultiPolygon,LineString
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 from scipy.spatial import KDTree,cKDTree
 import cv2
 import itertools
@@ -1607,12 +1608,14 @@ for iii in range(len(paired_planes)):
     def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
 
         filtered_shapes = []
-        point = []
+        feasible_points_on_edge = []
+        intersection_areas_on_edge =[]
         min_area = 0.3 * z_pg * b_pg
 
         for segment_shapes in all_shapes:
             filtered_segment = []
-            point_1 = []
+            feasible_point = []
+            intersection_areas = []
             for shape in segment_shapes:
                 pt = shape['point']
                 rectangles = shape['rectangles']
@@ -1635,8 +1638,10 @@ for iii in range(len(paired_planes)):
                 poly_2_list = plane_contour_polygon_list[2]
                 poly_3_list = plane_contour_polygon_list[3]
 
+                total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_0_list)
+                
                 # condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
-                condition_2 = any(poly.intersection(rect5_geom).area > min_area for poly in poly_0_list)
+                condition_2 = total_intersection_areas > min_area 
                 condition_3 = all(
                     not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
                     for poly in poly_1_list
@@ -1652,21 +1657,69 @@ for iii in range(len(paired_planes)):
 
                 if  condition_2 and condition_3 and condition_4 and condition_5:
                     filtered_segment.append(shape)
-                    point_1.append(pt)
+                    feasible_point.append(pt)
+                    intersection_areas.append(total_intersection_areas)
                 # if condition_1 :
                 #     filtered_segment.append(shape)
                 #     point_1.append(pt)                
 
             filtered_shapes.append(filtered_segment)
-            point.append(point_1)
+            feasible_points_on_edge.append(feasible_point)
+            intersection_areas_on_edge.append(intersection_areas)
+        return filtered_shapes,feasible_points_on_edge,intersection_areas_on_edge
 
-        return filtered_shapes,point
 
-
-    feasible_TCP_and_shapes,feasible_TCP = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
+    feasible_TCP_and_shapes,feasible_TCP,intersection_areas = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
     # feasible_TCP = [shape['point'] for segment in feasible_TCP_and_shapes for shape in segment]
 
     # highlight_segment_rect_grid(contour_segments_2d_p2,tcp_box,feasible_TCP)
+
+
+    #*********************** Ranking function ******************************************
+
+    def get_area_score(intersection_areas):
+        area_scores = []
+        max_area = (z_pg-2*rj)*(b_pg-2*rj)
+        for i,areas in enumerate(intersection_areas):
+
+            area_score = []
+
+            for j in areas:
+                if j > max_area:
+                    area_score.append(1.0)
+                else:
+                    area_score.append(j/max_area)
+
+            area_scores.append(area_score)
+        return area_scores
+
+    def get_center_score(TCP_points):
+        center_scores = []
+
+        for i,pts in enumerate(TCP_points):
+
+            center_score = []
+
+            for j,pt in enumerate (pts):
+                center_score.append(0)
+
+            center_scores.append(center_score)
+        return center_scores
+
+        return 0
+
+    def rank_feasible_tcp(feasible_TCP,intersection_areas):
+        w1 = 0.1
+        w2 = 0.9
+        area_scores = get_area_score(intersection_areas)
+        center_scores = get_center_score(center)
+        
+        return w1*area_scores + w2*center_scores
+
+    feasible_TCP_rank = rank_feasible_tcp(feasible_TCP,intersection_areas)
+
+    
+
 
 
     def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
