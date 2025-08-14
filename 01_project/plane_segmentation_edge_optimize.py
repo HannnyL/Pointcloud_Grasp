@@ -240,27 +240,32 @@ def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0
         raise TypeError("Input must be o3d.geometry.PointCloud or np.ndarray.")
 
     # DBSCAN聚类
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points)
-    labels = clustering.labels_
+    try:
+        clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points)
+        labels = clustering.labels_
 
-    # labels=-1 为噪声点
-    unique, counts = np.unique(labels, return_counts=True)
-    cluster_sizes = dict(zip(unique, counts))
+        # labels=-1 为噪声点
+        unique, counts = np.unique(labels, return_counts=True)
+        cluster_sizes = dict(zip(unique, counts))
 
-    # 确定哪些聚类视为主体
-    total_points = len(points)
-    main_clusters = [label for label, size in cluster_sizes.items()
-                    if label != -1 and size >= min_cluster_ratio * total_points]
+        # 确定哪些聚类视为主体
+        total_points = len(points)
+        main_clusters = [label for label, size in cluster_sizes.items()
+                        if label != -1 and size >= min_cluster_ratio * total_points]
 
-    mask = np.isin(labels, main_clusters)
+        mask = np.isin(labels, main_clusters)
 
-    if verbose:
-        print("聚类数量:", len(unique)-1)
-        print("识别为主体的聚类:", main_clusters)
-        print(f"原始点数: {total_points}, 保留点数: {np.sum(mask)}, 去除点数: {total_points - np.sum(mask)}")
+        if verbose:
+            print("聚类数量:", len(unique)-1)
+            print("识别为主体的聚类:", main_clusters)
+            print(f"原始点数: {total_points}, 保留点数: {np.sum(mask)}, 去除点数: {total_points - np.sum(mask)}")
 
-    filtered_points = points[mask]
-
+        filtered_points = points[mask]
+    except:
+        logging.warning("DBSCAN 聚类失败，跳过")
+        mask = np.zeros(len(points), dtype=bool)
+        return pcd,mask
+    
     if input_is_o3d:
         filtered_pcd = o3d.geometry.PointCloud()
         filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
@@ -592,7 +597,7 @@ for count, (i, j) in enumerate(paired_planes):
 #---------------Find center plane---------------
 
 # iii=11
-for iii in range(len(paired_planes)):
+for iii in range(12):
     (mmm,nnn) = paired_planes[iii]
     plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
     plane_j_points = np.asarray(pcd.select_by_index(plane_indices_list[nnn]).points)
@@ -793,8 +798,8 @@ for iii in range(len(paired_planes)):
     center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
     # 1. 筛选出在两个平面之间的点
-    points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],0.001,False)
-    points_between_p3_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3, plane_normals[nnn],0.001,False)
+    points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],False)
+    points_between_p3_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3, plane_normals[nnn],False)
     points_between_p3 = np.vstack((points_between_p3_i, points_between_p3_j))
 
     # 2. 投影到中间平面
@@ -844,7 +849,12 @@ for iii in range(len(paired_planes)):
 
     ##**************************** Plane 4: find beside collision area ****************************
 
+
+    # points_between_p4_i,points_beside = select_points_between_planes(points_beside, center_i_p3, center_j_p3, plane_normals[mmm],True)
+
+    
     projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
+    # projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
 
     # 3. 创建 PointCloud 对象
     proj_pcd_p4_unfilter = o3d.geometry.PointCloud()
@@ -852,7 +862,7 @@ for iii in range(len(paired_planes)):
     proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])  # 蓝色
 
     proj_pcd_p4,ind_p4 = remove_pcd_outlier_dbscan(proj_pcd_p4_unfilter)
-    # proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     o3d.io.write_point_cloud("proj_pcd_p4.pcd", proj_pcd_p4)
     projecter_points_p4 = np.asarray(proj_pcd_p4.points)
 
@@ -1232,7 +1242,7 @@ for iii in range(len(paired_planes)):
             plt.show()
 
 
-    highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
+    # highlight_segment_rect_grid(contour_segments_2d_p2, tcp_box, test_grid_points)
 
 
     # Show Gripper Bounding Box
@@ -1679,50 +1689,63 @@ for iii in range(len(paired_planes)):
 
     def get_area_score(intersection_areas):
         area_scores = []
-        max_area = (z_pg-2*rj)*(b_pg-2*rj)
-        for i,areas in enumerate(intersection_areas):
-
-            area_score = []
-
-            for j in areas:
-                if j > max_area:
-                    area_score.append(1.0)
-                else:
-                    area_score.append(j/max_area)
-
-            area_scores.append(area_score)
+        max_area = max((z_pg - 2*rj) * (b_pg - 2*rj), 1e-9)  # avoid 0
+        for areas in intersection_areas:
+            scores = []
+            for a in areas:
+                scores.append(1.0 if a > max_area else (a / max_area))
+            area_scores.append(scores)
         return area_scores
 
-    def get_center_score(TCP_points):
+
+    def get_center_score(TCP_points, center_guess, dir1, dir2, center):
+        """
+        For each segment i, returns a list of center-based scores (one per feasible TCP point).
+        Closer to the projected center => higher score (normalized to [0,1]).
+        """
+        center_guess = np.asarray(center_guess, dtype=float)
+        center = np.asarray(center, dtype=float)
+        # project the 3D center into the same 2D basis as TCP_points
+        basis = np.vstack([dir1, dir2]).T  # shape (3,2) or (2,2) depending on your setup
+        center_local = np.dot(center_guess - center, basis)
+
         center_scores = []
-
-        for i,pts in enumerate(TCP_points):
-
-            center_score = []
-
-            for j,pt in enumerate (pts):
-                center_score.append(0)
-
-            center_scores.append(center_score)
+        eps = 1e-12
+        for pts in TCP_points:
+            if not pts:                 # no feasible points on this segment
+                center_scores.append([])
+                continue
+            pts_np = np.asarray(pts, dtype=float).reshape(-1, 2)
+            d = np.linalg.norm(pts_np - center_local, axis=1)
+            if d.max() - d.min() < eps:
+                scores = np.ones_like(d)      # all same distance -> give all 1.0
+            else:
+                scores = 1.0 - (d - d.min()) / (d.max() - d.min())
+            center_scores.append(scores.tolist())
         return center_scores
 
-        return 0
 
-    def rank_feasible_tcp(feasible_TCP,intersection_areas):
-        w1 = 0.1
-        w2 = 0.9
-        area_scores = get_area_score(intersection_areas)
-        center_scores = get_center_score(center)
-        
-        return w1*area_scores + w2*center_scores
+    def rank_feasible_tcp(feasible_TCP, intersection_areas):
+        w1, w2 = 0.1, 0.9
+        # 2D mean of original_points
+        means = np.mean(original_points, axis=0)
 
+        area_scores = get_area_score(intersection_areas)                      # list[list[float]]
+        center_scores = get_center_score(feasible_TCP, means, dir1, dir2, center)  # list[list[float]]
+
+        ranked = []
+        for c_seg, a_seg in zip(center_scores, area_scores):
+            # ensure same length per segment (should match by construction)
+            m = min(len(c_seg), len(a_seg))
+            ranked.append([w1 * c_seg[k] + w2 * a_seg[k] for k in range(m)])
+        return ranked
     feasible_TCP_rank = rank_feasible_tcp(feasible_TCP,intersection_areas)
 
-    
 
 
 
-    def highlight_feasible_tcp(TCP_points, segments_2d, tcp_box):
+
+    def highlight_feasible_tcp(TCP_points,TCP_rank, segments_2d, tcp_box):
         """
         遍历 filtered_shapes 中的每组 shape，依次高亮展示：
         - 所有线段（蓝色）
@@ -1741,7 +1764,7 @@ for iii in range(len(paired_planes)):
 
 
         for i,pt in enumerate(TCP_points):
-            fig, ax = plt.subplots(figsize=(6, 6))
+            fig, ax = plt.subplots(figsize=(10, 6))
             ax.set_title(f"Edge {i+1}: Feasible TCP and TCP Box")
 
             # 所有线段：蓝色
@@ -1788,14 +1811,27 @@ for iii in range(len(paired_planes)):
             # print(pt.shape)          # 看维度
             # print(pt.ndim)
             if pt.size:
-                ax.plot(pt[:,0], pt[:,1],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')
+                scores_i = np.array(TCP_rank[i], dtype=float)  # (Ni,)
+                if scores_i.shape[0] != pt.shape[0]:
+                    print(f"[warn] edge {i}: #scores({scores_i.shape[0]}) != #pts({pt.shape[0]})")
+                    # 可选：截断或跳过
+                    m = min(scores_i.shape[0], pt.shape[0])
+                    pt = pt[:m]
+                    scores_i = scores_i[:m]
+                # ax.plot(pt[:,0], pt[:,1],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')
+                scatter = plt.scatter(pt[:, 0], pt[:, 1], c=scores_i, cmap='RdYlGn',vmin=0, vmax=1, s=10, label='Feasible TCP Point')
+                cbar = plt.colorbar(scatter, ax=ax, label='Score', fraction=0.046, pad=0.04)
+                cbar.set_ticks([0.0, 0.5, 1.0])  # 最小、中间、最大
+                cbar.set_ticklabels([f"0.0", f"0.5", f"1.0"])
             else:
                 print("No feasible TCP point found!")
-                ax.plot([], [],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')                
+                ax.plot([], [],linestyle='None', marker='x', color='lime', label='Feasible TCP Point')
+                # scatter = plt.scatter([], [], c=scores_i, cmap='RdYlGn', s=100, label='Feasible TCP Point')   
 
             # 当前矩形框（rectangles[0]）：绿色虚线框
             rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
             ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
+
 
             ax.set_xlim(min_xy[0], max_xy[0])
             ax.set_ylim(min_xy[1], max_xy[1])
@@ -1805,4 +1841,4 @@ for iii in range(len(paired_planes)):
             plt.tight_layout()
             plt.show()
 
-    highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
+    highlight_feasible_tcp(feasible_TCP,feasible_TCP_rank,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
