@@ -58,7 +58,7 @@ class parallel_gripper:
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
 
-with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\self_test.yaml", "r", encoding="utf-8") as f:
+with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\Franka.yaml", "r", encoding="utf-8") as f:
     params = yaml.safe_load(f)
 
 
@@ -334,13 +334,13 @@ def orient_normals_outward(
     return pcd
 
 
-path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd")
+path = pathlib.Path(r"Object/Verification_examples/02_Wall_no_Logo_sampled.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
-dists = pcd.compute_nearest_neighbor_distance()
-avg_d  = np.mean(dists)
-if avg_d > 0.5:
-    scale_factor = 1/1000
-    pcd.scale(scale_factor, pcd.get_center())
+# dists = pcd.compute_nearest_neighbor_distance()
+# avg_d  = np.mean(dists)
+# if avg_d > 0.5:
+#     scale_factor = 1/1000
+#     pcd.scale(scale_factor, pcd.get_center())
 # pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.01, max_nn=50))
 # orient_normals_outward(pcd)
 # o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
@@ -597,7 +597,7 @@ for count, (i, j) in enumerate(paired_planes):
 #---------------Find center plane---------------
 
 # iii=11
-for iii in range(12):
+for iii in range(len(paired_planes)):
     (mmm,nnn) = paired_planes[iii]
     plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
     plane_j_points = np.asarray(pcd.select_by_index(plane_indices_list[nnn]).points)
@@ -792,10 +792,10 @@ for iii in range(12):
 
     #**************************** Plane 3: find outside(finger) collision area ****************************
 
-    # center_i_outside = center_i + (j_pg/2) * (plane_normals[mmm])
-    # center_j_outside = center_j + (j_pg/2) * (plane_normals[nnn])
-    center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
-    center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
+    center_i_p3 = center_i + (j_pg/2) * (plane_normals[mmm]) * dist_dir_j
+    center_j_p3 = center_j + (j_pg/2) * (plane_normals[nnn]) * dist_dir_j
+    # center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
+    # center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
     # 1. 筛选出在两个平面之间的点
     points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],False)
@@ -1615,12 +1615,81 @@ for iii in range(12):
     # plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
 
     #********************** Loop Find feasible TCP *********************
+    from shapely.validation import explain_validity, make_valid   # Shapely>=2.0
+    from shapely import set_precision
+    from shapely.geometry import Polygon, Point
+    from shapely.errors import GEOSException
+    from shapely.ops import unary_union
+    GRID_SIZE = 1e-9
+
+    def _clean_geom(geom, name=""):
+        """
+        1) 统一精度（snap 到固定网格）
+        2) 修正无效几何（make_valid）
+        3) 仍无效则用 buffer(0) 兜底
+        4) 若返回 GeometryCollection/Multi…，尽量合并面
+        """
+        if geom.is_empty:
+            return geom
+
+        # 1) 限定精度，减少浮点毛刺
+        g = set_precision(geom, GRID_SIZE)
+
+        # 2) 修正无效
+        if not g.is_valid:
+            g = make_valid(g)
+
+        # 3) 兜底
+        if not g.is_valid:
+            g = g.buffer(0)
+
+        # 4) 合并为单一面或保持多面
+        try:
+            if hasattr(g, "geoms"):
+                # 尝试合并（对相邻/重叠面的清洗很有用）
+                g = unary_union(g)
+        except Exception:
+            pass
+
+        # 如仍无效，打印一次调试信息（可选）
+        if not g.is_valid:
+            msg = explain_validity(g)
+            print(f"[WARN] Geometry '{name}' still invalid after cleaning: {msg}")
+
+        return g
+
+    def _safe_intersection_area(a, b):
+        """
+        在交集时启用 grid_size（snap rounding），并在异常时回退到 buffer(0)
+        """
+        try:
+            # Shapely 2.x 的交集允许传 grid_size
+            return a.intersection(b, grid_size=GRID_SIZE).area
+        except GEOSException:
+            a2 = _clean_geom(a, "A@fallback")
+            b2 = _clean_geom(b, "B@fallback")
+            return a2.intersection(b2, grid_size=GRID_SIZE).area
+        
+
     def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
 
         filtered_shapes = []
         feasible_points_on_edge = []
         intersection_areas_on_edge =[]
         min_area = 0.3 * z_pg * b_pg
+
+        # 先把 plane_contour_polygon_list 里的 Polygon 统一成 list，并清洗
+        for i in range(4):
+            lst = plane_contour_polygon_list[i]
+            if isinstance(lst, Polygon):
+                plane_contour_polygon_list[i] = [lst]
+            # 对每个多边形做清洗与设精度
+            plane_contour_polygon_list[i] = [_clean_geom(p, f"plane_poly_{i}") for p in plane_contour_polygon_list[i]]
+
+        poly_0_list = plane_contour_polygon_list[0]
+        poly_1_list = plane_contour_polygon_list[1]
+        poly_2_list = plane_contour_polygon_list[2]
+        poly_3_list = plane_contour_polygon_list[3]
 
         for segment_shapes in all_shapes:
             filtered_segment = []
@@ -1637,16 +1706,6 @@ for iii in range(12):
                 rect4_geom = Polygon(rectangles[3])  # Robot arm 
                 rect5_geom = Polygon(rectangles[4])  # Gripper Area
                 rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
-
-                for i in range(4):
-                    lst = plane_contour_polygon_list[i]
-                    if isinstance(lst, Polygon):
-                        plane_contour_polygon_list[i] = [lst]
-
-                poly_0_list = plane_contour_polygon_list[0]
-                poly_1_list = plane_contour_polygon_list[1]
-                poly_2_list = plane_contour_polygon_list[2]
-                poly_3_list = plane_contour_polygon_list[3]
 
                 total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_0_list)
                 
@@ -1677,6 +1736,70 @@ for iii in range(12):
             feasible_points_on_edge.append(feasible_point)
             intersection_areas_on_edge.append(intersection_areas)
         return filtered_shapes,feasible_points_on_edge,intersection_areas_on_edge
+    
+#********************* Original Version *************
+    # def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
+
+    #     filtered_shapes = []
+    #     feasible_points_on_edge = []
+    #     intersection_areas_on_edge =[]
+    #     min_area = 0.3 * z_pg * b_pg
+
+    #     for segment_shapes in all_shapes:
+    #         filtered_segment = []
+    #         feasible_point = []
+    #         intersection_areas = []
+    #         for shape in segment_shapes:
+    #             pt = shape['point']
+    #             rectangles = shape['rectangles']
+                
+    #             point_geom = Point(pt)
+    #             rect1_geom = Polygon(rectangles[0])  # Finger tip Safe Space
+    #             rect2_geom = Polygon(rectangles[1])  # Finger length
+    #             rect3_geom = Polygon(rectangles[2])  # Gripper Base
+    #             rect4_geom = Polygon(rectangles[3])  # Robot arm 
+    #             rect5_geom = Polygon(rectangles[4])  # Gripper Area
+    #             rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
+
+    #             for i in range(4):
+    #                 lst = plane_contour_polygon_list[i]
+    #                 if isinstance(lst, Polygon):
+    #                     plane_contour_polygon_list[i] = [lst]
+
+    #             poly_0_list = plane_contour_polygon_list[0]
+    #             poly_1_list = plane_contour_polygon_list[1]
+    #             poly_2_list = plane_contour_polygon_list[2]
+    #             poly_3_list = plane_contour_polygon_list[3]
+
+    #             total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_0_list)
+
+    #             # condition_1 = any(poly.contains(point_geom) for poly in poly_0_list)
+    #             condition_2 = total_intersection_areas > min_area 
+    #             condition_3 = all(
+    #                 not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
+    #                 for poly in poly_1_list
+    #             )
+    #             condition_4 = all(
+    #                 not poly.intersects(rect1_geom) and
+    #                 not poly.intersects(rect2_geom) and
+    #                 not poly.intersects(rect3_geom) and
+    #                 not poly.intersects(rect4_geom)
+    #                 for poly in poly_2_list
+    #             )
+    #             condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_3_list)
+
+    #             if  condition_2 and condition_3 and condition_4 and condition_5:
+    #                 filtered_segment.append(shape)
+    #                 feasible_point.append(pt)
+    #                 intersection_areas.append(total_intersection_areas)
+    #             # if condition_1 :
+    #             #     filtered_segment.append(shape)
+    #             #     point_1.append(pt)                
+
+    #         filtered_shapes.append(filtered_segment)
+    #         feasible_points_on_edge.append(feasible_point)
+    #         intersection_areas_on_edge.append(intersection_areas)
+    #     return filtered_shapes,feasible_points_on_edge,intersection_areas_on_edge
 
 
     feasible_TCP_and_shapes,feasible_TCP,intersection_areas = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
@@ -1842,3 +1965,105 @@ for iii in range(12):
             plt.show()
 
     highlight_feasible_tcp(feasible_TCP,feasible_TCP_rank,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
+
+
+
+    def highlight_feasible_all_tcp(TCP_points, TCP_rank, segments_2d, tcp_box):
+        """
+        展示：
+        - 所有线段（蓝色）
+        - 各边对应的可行 TCP 点（按分数着色）
+        - 各边对应的 TCP 矩形框（绿色虚线）
+
+        参数：
+        - TCP_points: List[np.ndarray (Ni,2)]，每条边的 TCP 点集
+        - TCP_rank:   List[np.ndarray (Ni,)]，与 TCP_points 对应的分数
+        - segments_2d: List[ (pt1, pt2) ]，每条边的两个端点 (2,)
+        - tcp_box:    List[np.ndarray (4,2)] 或 (M,2)，每条边的矩形四点（按顺序）
+        """
+
+        # 收集所有点用于设定坐标范围
+        all_xy = []
+        for (pt1, pt2) in segments_2d:
+            all_xy.extend([pt1, pt2])
+        for pts in TCP_points:
+            if pts is not None and len(pts) > 0:
+                all_xy.extend(list(np.asarray(pts)))
+        for rect in tcp_box:
+            r = np.asarray(rect)
+            if r.ndim == 2 and r.shape[0] >= 3:
+                all_xy.extend(list(r))
+
+        all_xy = np.asarray(all_xy) if len(all_xy) else np.zeros((1,2))
+        pad = 0.02
+        min_xy = all_xy.min(axis=0) - pad
+        max_xy = all_xy.max(axis=0) + pad
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title("All Feasible TCP and TCP Box")
+
+        used_labels = set()
+        scatter_handle = None
+        cbar = None
+
+        # 同步遍历四者，避免索引错位
+        for (pt1, pt2), tcp, rect, scores in zip(segments_2d, TCP_points, tcp_box, TCP_rank):
+            # 1) 线段-蓝色
+            lbl = 'Contours on Plane'
+            if lbl not in used_labels:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2, label=lbl)
+                used_labels.add(lbl)
+            else:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2)
+
+            # 2) TCP 点-按分数着色
+            tcp = np.asarray(tcp) if tcp is not None else np.empty((0,2))
+            scores = np.asarray(scores, dtype=float) if scores is not None else np.empty((0,))
+            if tcp.ndim == 1 and tcp.size == 2:
+                tcp = tcp.reshape(1, 2)
+
+            if tcp.size > 0:
+                # 对齐长度
+                m = min(len(tcp), len(scores))
+                if m == 0:
+                    pass
+                else:
+                    tcp = tcp[:m]
+                    scores = scores[:m]
+                    # 尝试根据数据范围设置色条范围
+                    vmin = np.nanmin(scores) if np.isfinite(scores).any() else 0.0
+                    vmax = np.nanmax(scores) if np.isfinite(scores).any() else 1.0
+                    if vmin == vmax:
+                        vmin, vmax = vmax - 1.0, vmax + 1.0
+
+                    lbl = 'Feasible TCP Point'
+                    scatter_handle = ax.scatter(tcp[:, 0], tcp[:, 1],
+                                                c=scores, cmap='RdYlGn',
+                                                vmin=vmin, vmax=vmax, s=10,
+                                                label=(lbl if 'Feasible TCP Point' not in used_labels else None))
+                    if 'Feasible TCP Point' not in used_labels:
+                        used_labels.add('Feasible TCP Point')
+
+                    if cbar is None and scatter_handle is not None:
+                        cbar = plt.colorbar(scatter_handle, ax=ax, label='Score', fraction=0.046, pad=0.04)
+
+            # 3) TCP 矩形-绿色虚线（闭合）
+            rect = np.asarray(rect)
+            if rect.ndim == 2 and rect.shape[0] >= 3:
+                rect_closed = np.vstack([rect, rect[0]])
+                lbl = 'TCP Box'
+                if lbl not in used_labels:
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.5, label=lbl)
+                    used_labels.add(lbl)
+                else:
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.0)
+
+        ax.set_xlim(min_xy[0], max_xy[0])
+        ax.set_ylim(min_xy[1], max_xy[1])
+        ax.set_aspect('equal')
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.legend(loc='best')
+        plt.tight_layout()
+        plt.show()
+
+    highlight_feasible_all_tcp(feasible_TCP,feasible_TCP_rank,contour_segments_2d_p2,tcp_box)

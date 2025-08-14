@@ -791,10 +791,10 @@ for iii in range(len(paired_planes)):
 
     #**************************** Plane 3: find outside(finger) collision area ****************************
 
-    # center_i_outside = center_i + (j_pg/2) * (plane_normals[mmm])
-    # center_j_outside = center_j + (j_pg/2) * (plane_normals[nnn])
-    center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
-    center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
+    center_i_p3 = center_i + (j_pg/2) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p3 = center_j + (j_pg/2) * (plane_normals[nnn]) * dist_dir_j
+    # center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
+    # center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
     # 1. 筛选出在两个平面之间的点
     points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],False)
@@ -984,7 +984,7 @@ for iii in range(len(paired_planes)):
         plt.imshow(img_contours)
         plt.title('Contours: Plane 2')
         plt.axis('off')
-        plt.show()
+        plt.close()
 
         # ---- 将轮廓转换回原始坐标空间 ---- #
         contours_real   = []        # 每个轮廓在 2D 投影坐标系下
@@ -1045,7 +1045,7 @@ for iii in range(len(paired_planes)):
             line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
 
         # 使用Open3D可视化所有轮廓
-        o3d.visualization.draw_geometries([pcd, line_set],window_name="P2 Contour Lines + Normals",width=1280, height=800)
+        # o3d.visualization.draw_geometries([pcd, line_set],window_name="P2 Contour Lines + Normals",width=1280, height=800)
 
         return line_segments_2d, line_normals_2d, dir1, dir2, center
 
@@ -1673,6 +1673,10 @@ for iii in range(len(paired_planes)):
             intersection_areas_on_edge.append(intersection_areas)
         return filtered_shapes,feasible_points_on_edge,intersection_areas_on_edge
 
+    feasible_TCP_and_shapes,feasible_TCP,intersection_areas = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
+    # feasible_TCP = [shape['point'] for segment in feasible_TCP_and_shapes for shape in segment]
+
+    # highlight_segment_rect_grid(contour_segments_2d_p2,tcp_box,feasible_TCP)
 
     #*********************** Ranking function ******************************************
 
@@ -1730,10 +1734,6 @@ for iii in range(len(paired_planes)):
         return ranked
     feasible_TCP_rank = rank_feasible_tcp(feasible_TCP,intersection_areas)
 
-    feasible_TCP_and_shapes,feasible_TCP,intersection_areas = find_feasible_tcp(plane_contour_polygon_list,points_and_gripper_bounding_box)
-    # feasible_TCP = [shape['point'] for segment in feasible_TCP_and_shapes for shape in segment]
-
-    # highlight_segment_rect_grid(contour_segments_2d_p2,tcp_box,feasible_TCP)
 
 
     def highlight_feasible_tcp(TCP_points,TCP_rank, segments_2d, tcp_box):
@@ -1833,3 +1833,104 @@ for iii in range(len(paired_planes)):
             plt.show()
 
     # highlight_feasible_tcp(feasible_TCP,contour_segments_2d_p2,tcp_box)  # 实际上不需要额外传，因为内部已包含 rectangles
+
+
+    def highlight_feasible_all_tcp(TCP_points, TCP_rank, segments_2d, tcp_box):
+        """
+        展示：
+        - 所有线段（蓝色）
+        - 各边对应的可行 TCP 点（按分数着色）
+        - 各边对应的 TCP 矩形框（绿色虚线）
+
+        参数：
+        - TCP_points: List[np.ndarray (Ni,2)]，每条边的 TCP 点集
+        - TCP_rank:   List[np.ndarray (Ni,)]，与 TCP_points 对应的分数
+        - segments_2d: List[ (pt1, pt2) ]，每条边的两个端点 (2,)
+        - tcp_box:    List[np.ndarray (4,2)] 或 (M,2)，每条边的矩形四点（按顺序）
+        """
+
+        # 收集所有点用于设定坐标范围
+        all_xy = []
+        for (pt1, pt2) in segments_2d:
+            all_xy.extend([pt1, pt2])
+        for pts in TCP_points:
+            if pts is not None and len(pts) > 0:
+                all_xy.extend(list(np.asarray(pts)))
+        for rect in tcp_box:
+            r = np.asarray(rect)
+            if r.ndim == 2 and r.shape[0] >= 3:
+                all_xy.extend(list(r))
+
+        all_xy = np.asarray(all_xy) if len(all_xy) else np.zeros((1,2))
+        pad = 0.02
+        min_xy = all_xy.min(axis=0) - pad
+        max_xy = all_xy.max(axis=0) + pad
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.set_title("All Feasible TCP and TCP Box")
+
+        used_labels = set()
+        scatter_handle = None
+        cbar = None
+
+        # 同步遍历四者，避免索引错位
+        for (pt1, pt2), tcp, rect, scores in zip(segments_2d, TCP_points, tcp_box, TCP_rank):
+            # 1) 线段-蓝色
+            lbl = 'Contours on Plane'
+            if lbl not in used_labels:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2, label=lbl)
+                used_labels.add(lbl)
+            else:
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2)
+
+            # 2) TCP 点-按分数着色
+            tcp = np.asarray(tcp) if tcp is not None else np.empty((0,2))
+            scores = np.asarray(scores, dtype=float) if scores is not None else np.empty((0,))
+            if tcp.ndim == 1 and tcp.size == 2:
+                tcp = tcp.reshape(1, 2)
+
+            if tcp.size > 0:
+                # 对齐长度
+                m = min(len(tcp), len(scores))
+                if m == 0:
+                    pass
+                else:
+                    tcp = tcp[:m]
+                    scores = scores[:m]
+                    # 尝试根据数据范围设置色条范围
+                    vmin = np.nanmin(scores) if np.isfinite(scores).any() else 0.0
+                    vmax = np.nanmax(scores) if np.isfinite(scores).any() else 1.0
+                    if vmin == vmax:
+                        vmin, vmax = vmax - 1.0, vmax + 1.0
+
+                    lbl = 'Feasible TCP Point'
+                    scatter_handle = ax.scatter(tcp[:, 0], tcp[:, 1],
+                                                c=scores, cmap='RdYlGn',
+                                                vmin=vmin, vmax=vmax, s=10,
+                                                label=(lbl if 'Feasible TCP Point' not in used_labels else None))
+                    if 'Feasible TCP Point' not in used_labels:
+                        used_labels.add('Feasible TCP Point')
+
+                    if cbar is None and scatter_handle is not None:
+                        cbar = plt.colorbar(scatter_handle, ax=ax, label='Score', fraction=0.046, pad=0.04)
+
+            # 3) TCP 矩形-绿色虚线（闭合）
+            rect = np.asarray(rect)
+            if rect.ndim == 2 and rect.shape[0] >= 3:
+                rect_closed = np.vstack([rect, rect[0]])
+                lbl = 'TCP Box'
+                if lbl not in used_labels:
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.5, label=lbl)
+                    used_labels.add(lbl)
+                else:
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.0)
+
+        ax.set_xlim(min_xy[0], max_xy[0])
+        ax.set_ylim(min_xy[1], max_xy[1])
+        ax.set_aspect('equal')
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.legend(loc='best')
+        plt.tight_layout()
+        plt.show()
+
+    # highlight_feasible_all_tcp(feasible_TCP,feasible_TCP_rank,contour_segments_2d_p2,tcp_box)
