@@ -29,3 +29,5 @@ profile_results_with_normal.txt
 profile_results_whole_object_no_plot_unregularbox.txt
 profile_results_whole_object_no_plot_bumped_cube_100k.txt
 01_project/delect.py
+out/
+01_project/load_pcd.py

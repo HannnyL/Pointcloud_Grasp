@@ -57,7 +57,24 @@ class parallel_gripper:
 
         y_pg = l_pg/2 + m_pg if (l_pg/2 + m_pg) >  (o_pg/2 + p_pg) else (o_pg/2 + p_pg) # Gripper Bounding box depth
 
-with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\self_test.yaml", "r", encoding="utf-8") as f:
+# MM_TO_M = 0.001
+
+# def load_yaml_in_m(filepath):
+#     """读取 YAML 文件，将所有数值从 mm 转成 m"""
+#     with open(filepath, "r", encoding="utf-8") as f:
+#         data_mm = yaml.safe_load(f)
+    
+#     # 转成 m（只处理数值型数据）
+#     data_m = {
+#         key: (value * MM_TO_M if isinstance(value, (int, float)) else value)
+#         for key, value in data_mm.items()
+#     }
+#     return data_m
+
+# # mm to m
+# params = load_yaml_in_m(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\Franka.yaml")
+
+with open(r"D:\Codecouldcode\099.MA_Hanyu\01_project\gripper_parameter\Franka.yaml", "r", encoding="utf-8") as f:
     params = yaml.safe_load(f)
 
 
@@ -103,6 +120,9 @@ re = params["re"] #robot arm diameter clearance
 rf = params["rf"] #robot arm length clearance
 rj = params["rj"] #repeatability of robot arm
 
+print("Gripper parameters:")
+print(f"a_pg: {a_pg:.3f} m")
+print(f"w_pg: {w_pg:.3f} m")
 # **************************** Aid Functions **************************************
 def filter_by_normal_orientation(
     pcd, n_ref, cos_th=0.965, knn=30, radius=None, max_nn=50
@@ -226,55 +246,62 @@ def remove_pcd_outlier_statistical(pcd, neighbots=20,std_ratio=1.0):
     #     return filtered_points, mask
 
 def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0.02,verbose=True):
-    #dbscan
-
-    # 兼容输入类型
-    input_is_o3d = False
-    if isinstance(pcd, o3d.geometry.PointCloud):
-        points = np.asarray(pcd.points)
-        input_is_o3d = True
-    elif isinstance(pcd, np.ndarray):
-        points = pcd
+    if len(pcd.points) <= 500:
+        pcd_null = o3d.geometry.PointCloud()
+        pcd_null.points = o3d.utility.Vector3dVector([])
+        return pcd_null,None
     else:
-        raise TypeError("Input must be o3d.geometry.PointCloud or np.ndarray.")
+        return pcd,None
+# def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0.02,verbose=True):
+#     #dbscan
 
-    # DBSCAN聚类
-    try:
-        clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points)
-        labels = clustering.labels_
+#     # 兼容输入类型
+#     input_is_o3d = False
+#     if isinstance(pcd, o3d.geometry.PointCloud):
+#         points = np.asarray(pcd.points)
+#         input_is_o3d = True
+#     elif isinstance(pcd, np.ndarray):
+#         points = pcd
+#     else:
+#         raise TypeError("Input must be o3d.geometry.PointCloud or np.ndarray.")
 
-        # labels=-1 为噪声点
-        unique, counts = np.unique(labels, return_counts=True)
-        cluster_sizes = dict(zip(unique, counts))
+#     # DBSCAN聚类
+#     try:
+#         clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(points)
+#         labels = clustering.labels_
 
-        # 确定哪些聚类视为主体
-        total_points = len(points)
-        main_clusters = [label for label, size in cluster_sizes.items()
-                        if label != -1 and size >= min_cluster_ratio * total_points]
+#         # labels=-1 为噪声点
+#         unique, counts = np.unique(labels, return_counts=True)
+#         cluster_sizes = dict(zip(unique, counts))
 
-        mask = np.isin(labels, main_clusters)
+#         # 确定哪些聚类视为主体
+#         total_points = len(points)
+#         main_clusters = [label for label, size in cluster_sizes.items()
+#                         if label != -1 and size >= min_cluster_ratio * total_points]
 
-        if verbose:
-            print("聚类数量:", len(unique)-1)
-            print("识别为主体的聚类:", main_clusters)
-            print(f"原始点数: {total_points}, 保留点数: {np.sum(mask)}, 去除点数: {total_points - np.sum(mask)}")
+#         mask = np.isin(labels, main_clusters)
 
-        filtered_points = points[mask]
-    except:
-        logging.warning("DBSCAN 聚类失败，跳过")
-        mask = np.zeros(len(points), dtype=bool)
-        return pcd,mask
+#         if verbose:
+#             print("聚类数量:", len(unique)-1)
+#             print("识别为主体的聚类:", main_clusters)
+#             print(f"原始点数: {total_points}, 保留点数: {np.sum(mask)}, 去除点数: {total_points - np.sum(mask)}")
 
-    if input_is_o3d:
-        filtered_pcd = o3d.geometry.PointCloud()
-        filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
-        filtered_pcd.colors= o3d.utility.Vector3dVector(np.array(pcd.colors)[mask])
-        return filtered_pcd, mask
-    else:
-        return filtered_points, mask
+#         filtered_points = points[mask]
+#     except:
+#         logging.warning("DBSCAN 聚类失败，跳过")
+#         mask = np.zeros(len(points), dtype=bool)
+#         return pcd,mask
+
+#     if input_is_o3d:
+#         filtered_pcd = o3d.geometry.PointCloud()
+#         filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+#         filtered_pcd.colors= o3d.utility.Vector3dVector(np.array(pcd.colors)[mask])
+#         return filtered_pcd, mask
+#     else:
+#         return filtered_points, mask
 
 # **************************** Step 1: 读取点云+外法线估计 ****************************
-point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Unregular_box_sampled.pcd"  # ← 修改为你的点云文件
+point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Verification_examples\03_Board_Empty_sampled.pcd"  # ← 修改为你的点云文件
 normal_radius = 0.05
 curvature_radius = 0.05
 dbscan_eps = 0.1
@@ -333,14 +360,14 @@ def orient_normals_outward(
     return pcd
 
 
-path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\exmple part v1-Body_sampled.pcd")
+path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Verification_examples\01_Bottom_CubeSat_sampled.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
 
-dists = pcd.compute_nearest_neighbor_distance()
-avg_d  = np.mean(dists)
-if avg_d > 0.5:
-    scale_factor = 1/1000
-    pcd.scale(scale_factor, pcd.get_center())
+# dists = pcd.compute_nearest_neighbor_distance()
+# avg_d  = np.mean(dists)
+# if avg_d > 0.5:
+#     scale_factor = 1/10000
+#     pcd.scale(scale_factor, pcd.get_center())
 # orient_normals_outward(pcd)
 # o3d.visualization.draw_geometries([pcd], point_show_normal=True,window_name="Estimated external normal")
 # ************************
@@ -361,6 +388,70 @@ max_planes = 100              # 最多检测几个平面（可调大）
 rest_pcd = copy.deepcopy(pcd)
 
 # ---------------- Step 3: 提取多个平面 ----------------
+#*******************GPTjia***************************
+# ===== [ADD] 工具函数：平面归一化 + 全局再标注 =====
+
+def _normalize_plane(model):
+    """把 ax+by+cz+d=0 的平面方程归一化到 ||[a,b,c]|| = 1，便于用“几何距离”阈值。"""
+    n = np.asarray(model[:3], dtype=float)
+    d = float(model[3])
+    s = np.linalg.norm(n)
+    if s == 0:
+        return n, d
+    return n / s, d / s
+
+def _global_relabel_by_planes(pcd,
+                              plane_models,
+                              dist_thr,
+                              tie_margin_ratio=0.3,
+                              angle_thr_deg=15):
+    """
+    方法一：在“原始点云”上按已检测出的平面模型做一次全局再标注。
+    - 允许边缘/拐角点多重归属（近似等距的多个平面都可归属）。
+    - 可选用法向一致性（若 pcd 已有法向）；否则仅用距离。
+    返回：
+      plane_indices_list_full: [np.array(...), ...] 每个平面的原始索引
+      membership_mask: (N,K) 的布尔矩阵，便于你可视化多重归属
+    """
+    P = np.asarray(pcd.points)
+    N_points = len(P)
+    K = len(plane_models)
+    if N_points == 0 or K == 0:
+        return [], None
+
+    # 归一化每个平面到几何距离
+    Ns, Ds = [], []
+    for m in plane_models:
+        n, d = _normalize_plane(m)
+        Ns.append(n)
+        Ds.append(d)
+    Ns = np.asarray(Ns)            # (K,3)
+    Ds = np.asarray(Ds)            # (K,)
+
+    # 点到各平面几何距离：|x·n + d|
+    dists = np.abs(P @ Ns.T + Ds[None, :])    # (N,K)
+
+    # 基于距离的主判据
+    labels = (dists <= dist_thr)
+
+    # 可选：法向一致性（若已有法向），抑制跨面误标
+    if angle_thr_deg is not None and pcd.has_normals():
+        normals = np.asarray(pcd.normals)     # (N,3)
+        cos_thr = np.cos(np.deg2rad(angle_thr_deg))
+        ang_ok = (np.abs(normals @ Ns.T) >= cos_thr)   # (N,K)
+        labels = labels & ang_ok
+
+    # 允许边界点“近似等距”的多重归属（tie-margin）
+    tie_margin = float(dist_thr) * float(tie_margin_ratio)
+    min_d = dists.min(axis=1, keepdims=True)                 # (N,1)
+    valid = (min_d <= (dist_thr + tie_margin))               # (N,1)
+    near_tie = (dists - min_d) <= tie_margin                 # (N,K)
+    labels = labels | (near_tie & valid)
+
+    plane_indices_list_full = [np.where(labels[:, k])[0] for k in range(K)]
+    return plane_indices_list_full, labels
+
+#***************************************************
 
 def correct_normal_direction_by_density(pcd, plane_indices, plane_normal):
         
@@ -419,6 +510,33 @@ for i in range(max_planes):
     # 剩余点云
     rest_pcd = rest_pcd.select_by_index(inliers, invert=True)
     original_indices = np.delete(original_indices, inliers)
+
+    
+# relabel_dist_thr = distance_threshold          # 可按需要放宽，如 1.2 * distance_threshold
+# tie_margin_ratio = 0.3                         # 近似等距放宽比例（边界允许多归属）
+# angle_thr_deg = 15                             # 若 pcd 有法向则启用；没有法向会自动忽略
+
+# plane_indices_list_full, membership_mask = _global_relabel_by_planes(
+#     pcd=pcd,
+#     plane_models=plane_models,
+#     dist_thr=relabel_dist_thr,
+#     tie_margin_ratio=tie_margin_ratio,
+#     angle_thr_deg=angle_thr_deg
+# )
+
+# # 用“完整索引”覆盖原本的 plane_indices_list，保持后续变量名不变
+# plane_indices_list = plane_indices_list_full
+
+# # （可选）按“再标注后的规模”重新过滤过小平面，保持颜色/模型/法向一致对齐
+# keep_mask = [len(idx) >= min_points_per_plane for idx in plane_indices_list]
+# if not all(keep_mask):
+#     plane_indices_list = [idx for idx, keep in zip(plane_indices_list, keep_mask) if keep]
+#     plane_models      = [m   for m,   keep in zip(plane_models,      keep_mask) if keep]
+#     plane_normals     = [n   for n,   keep in zip(plane_normals,     keep_mask) if keep]
+#     plane_colors      = [c   for c,   keep in zip(plane_colors,      keep_mask) if keep]
+
+# # （可选）若你需要每个平面的完整子云
+# plane_subclouds = [pcd.select_by_index(idx.tolist()) for idx in plane_indices_list]
 
 # ---------------- Step 4: 可视化着色 ----------------
 # 创建一个点云，给所有点上色
@@ -574,6 +692,8 @@ for group in parallel_groups:
             # if is_opposite_direction(idx_i, idx_j):
             paired_planes.append((idx_i, idx_j))
 
+print(f"\n\n=======================================\n========== Paired planes: {len(paired_planes)} ==========\n=======================================")
+
 #可视化
 for count, (i, j) in enumerate(paired_planes):
     # 创建新的颜色数组，初始为灰色
@@ -596,21 +716,27 @@ for count, (i, j) in enumerate(paired_planes):
 #---------------Find center plane---------------
 
 # iii=14
+counter = 0
 for iii in range(len(paired_planes)):
+    counter+=1  
+    print(f"\n\n----------------------------------------\n-------- Processing pair: {counter}/{len(paired_planes)} --------\n----------------------------------------")
+
+
     (mmm,nnn) = paired_planes[iii]
     plane_i_points = np.asarray(pcd.select_by_index(plane_indices_list[mmm]).points)
     plane_j_points = np.asarray(pcd.select_by_index(plane_indices_list[nnn]).points)
     center_i = np.mean(plane_i_points, axis=0)
     center_j = np.mean(plane_j_points, axis=0)
 
-    # dist_plane = abs(np.dot(center_i-center_j,plane_normals[mmm]))
+    dist_plane = abs(np.dot(center_i-center_j,plane_normals[mmm]))
 
-    # if dist_plane < g_pg:
-    #     print("\n####################\nPlane pair distance is too small, skip\n####################\n")
-    #     continue
-    # elif dist_plane > f_pg - 2 * w_pg:
-    #     print("\n####################\nPlane pair distance is too far, skip\n####################\n")
-    #     continue
+    print(f"Plane pair distance: {dist_plane:.3f},open:{(f_pg - 2 * w_pg)},close:{g_pg}")
+    if dist_plane < g_pg:
+        print("\n####################\nPlane pair distance is too small, skip\n####################\n")
+        continue
+    elif dist_plane > (f_pg - 2 * w_pg):
+        print("\n####################\nPlane pair distance is too far, skip\n####################\n")
+        continue
 
     center_ij = (center_i + center_j) / 2
 
@@ -698,11 +824,15 @@ for iii in range(len(paired_planes)):
             B_keep = np.array(matched_B, dtype=float).reshape(-1, 3)
             if A_keep.size == 0 and B_keep.size == 0:
                 print("\n############################\nThere is no intersection between this pair of planes.\n############################\n")
-                return 2.1
+                return None
             else:
                 # 合并重合区域的点
                 overlap_points = A_keep if B_keep.size == 0 else (B_keep if A_keep.size == 0 else np.vstack([A_keep, B_keep]))
 
+            if len(overlap_points) < 200:
+                print("\n############################\nThere are less than 200 points here.\n############################\n")
+                return None
+            
             pcd_overlap = o3d.geometry.PointCloud()
             pcd_overlap.points = o3d.utility.Vector3dVector(overlap_points)
             pcd_overlap.paint_uniform_color([0, 1, 0])  # 绿色标记
@@ -710,7 +840,7 @@ for iii in range(len(paired_planes)):
             return pcd_overlap
 
     overlap_pcd_unfilter = extract_overlap_region(pcd_proj_i, pcd_proj_j, threshold=0.001)
-    if overlap_pcd_unfilter == 2.1:
+    if overlap_pcd_unfilter is None:
         continue
 
     overlap_pcd,ind_p1 = filter_by_normal_orientation(overlap_pcd_unfilter,plane_normals[mmm])
@@ -791,8 +921,8 @@ for iii in range(len(paired_planes)):
 
     #**************************** Plane 3: find outside(finger) collision area ****************************
 
-    center_i_p3 = center_i + (j_pg/2) * (plane_normals[mmm]) * dist_dir_i
-    center_j_p3 = center_j + (j_pg/2) * (plane_normals[nnn]) * dist_dir_j
+    center_i_p3 = center_i + (y_pg/2) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p3 = center_j + (y_pg/2) * (plane_normals[nnn]) * dist_dir_j
     # center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
     # center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
@@ -849,7 +979,10 @@ for iii in range(len(paired_planes)):
 
     ##**************************** Plane 4: find beside collision area ****************************
 
+    points_between_p4_i,points_beside = select_points_between_planes(points_beside, center_i_p3, center_j_p3, plane_normals[mmm],False)
+
     projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
+
 
     # 3. 创建 PointCloud 对象
     proj_pcd_p4_unfilter = o3d.geometry.PointCloud()
@@ -885,17 +1018,28 @@ for iii in range(len(paired_planes)):
 
     #**************************** P2: Find contours ****************************
 
-    def auto_img_scale(pcd,
-                    target_px=1000,          # 想让最长边落在~1000 px
-                    max_scale=1500,          # 不要比 1500 更大
-                    min_scale=200):           # 也别太小，避免过密
-        """
-        根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
-        """
-        dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
-        avg_d  = np.mean(dists)
-        scale = target_px * 0.0015/avg_d
-        return max(min(scale, max_scale), min_scale)
+    # def auto_img_scale(pcd,
+    #                 target_px=1000,          # 想让最长边落在~1000 px
+    #                 max_scale=1500,          # 不要比 1500 更大
+    #                 min_scale=200):           # 也别太小，避免过密
+    #     """
+    #     根据 bbox 尺寸自适应 img_scale，并限制在 [min_scale, max_scale] 区间。
+    #     """
+    #     dists = pcd.compute_nearest_neighbor_distance()   # Δx/Δy 最大值
+    #     avg_d  = np.mean(dists)
+    #     scale = target_px * 0.0015/avg_d
+    #     return max(min(scale, max_scale), min_scale)
+
+    def auto_img_scale(pcd, target_size=512):
+        points = np.asarray(pcd.points)
+        # 计算原始点云在2D主平面中的宽高
+        min_vals = points.min(axis=0)
+        max_vals = points.max(axis=0)
+        ranges = max_vals - min_vals
+
+        # 选择较大的边作为基准，统一缩放为 target_size
+        scale = target_size / np.max(ranges)
+        return scale
     #-----------------------chat-cv2------------------------
 
     def extract_and_visualize_contour_segments_with_normals(pcd, scale=1500, approx_eps_ratio=0.01):
@@ -1408,7 +1552,7 @@ for iii in range(len(paired_planes)):
 
         points = np.asarray(pcd.points)
 
-        if points.size == 0:
+        if points.size <= 50:
             return Polygon()
 
         # 2. 投影到主平面 (2D)
@@ -1482,7 +1626,7 @@ for iii in range(len(paired_planes)):
         # 显示轮廓和高级处理结果
         plt.figure(figsize=(10, 6))
         plt.imshow(img_contours)
-        plt.title('Contours: Rect (Green), RotRect (Blue), Hull (Red), ApproxPoly (Yellow)')
+        plt.title('Contour Dectection Result')
         plt.axis('off')
         plt.close()
 
@@ -1507,7 +1651,10 @@ for iii in range(len(paired_planes)):
             points_3d = np.dot(points_2d_back, np.vstack([dir1, dir2])) + center
 
             contours_real.append(points_2d_back)
-            polygons_2d.append(Polygon(points_2d_back))
+            if points_2d_back.size <= 4:
+                polygons_2d.append(Polygon())
+            else:
+                polygons_2d.append(Polygon(points_2d_back))
             # contour_points_list.append(points_3d)
 
             # 构造Open3D LineSet对象
@@ -1527,76 +1674,76 @@ for iii in range(len(paired_planes)):
         pcd.paint_uniform_color([0.5, 0.5, 0.5])
 
         # 使用Open3D可视化所有轮廓
-        # o3d.visualization.draw_geometries([pcd, *linesets])
+        # o3d.visualization.draw_geometries([pcd, *linesets],window_name='Plane Contours 3D View')
 
 
 
 
 
-        # 轮廓转回真实二维坐标
-        # contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
-        # poly_contour = Polygon(contour_real)
+        # # 轮廓转回真实二维坐标
+        # # contour_real = approx.reshape(-1, 2).astype(np.float32)/img_scale + points.min(axis=0)
+        # # poly_contour = Polygon(contour_real)
 
-        # 判断点是否在轮廓内
-        test_point = (0.0, 0.02)
-        # is_inside = polygons_2d.contains(Point(test_point))
-        # print(f"点{test_point}是否位于轮廓内：{is_inside}")
-        is_inside = any(poly.contains(Point(test_point)) for poly in polygons_2d)
-        print(f"点 {test_point} 是否位于某个轮廓内：{is_inside}")
+        # # 判断点是否在轮廓内
+        # test_point = (0.0, 0.02)
+        # # is_inside = polygons_2d.contains(Point(test_point))
+        # # print(f"点{test_point}是否位于轮廓内：{is_inside}")
+        # is_inside = any(poly.contains(Point(test_point)) for poly in polygons_2d)
+        # print(f"点 {test_point} 是否位于某个轮廓内：{is_inside}")
 
-        # 计算相交面积（实际单位）
-        intersection_areas = []
-        rect_real = np.array([[-0.05,-0.01], [0.05,-0.01], [0.05,-0.05], [-0.05,-0.05]])
-        poly_rect = Polygon(rect_real)
+        # # 计算相交面积（实际单位）
+        # intersection_areas = []
+        # rect_real = np.array([[-0.05,-0.01], [0.05,-0.01], [0.05,-0.05], [-0.05,-0.05]])
+        # poly_rect = Polygon(rect_real)
 
-        for idx, poly in enumerate(polygons_2d):
-            intersection = poly.intersection(poly_rect)
-            area = intersection.area
-            intersection_areas.append(area)
-        print(f"最大相交面积：{max(intersection_areas)*1e4:.2f} cm^2")
-        # intersection_area = polygons_2d.intersection(poly_rect).area
-        # print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
+        # for idx, poly in enumerate(polygons_2d):
+        #     intersection = poly.intersection(poly_rect)
+        #     area = intersection.area
+        #     intersection_areas.append(area)
+        # print(f"最大相交面积：{max(intersection_areas)*1e4:.2f} cm^2")
+        # # intersection_area = polygons_2d.intersection(poly_rect).area
+        # # print(f"实际相交面积：{intersection_area*1e4}(cm^2)")
 
 
-        # ---开始绘图---
-        plt.figure(figsize=(10, 8))
+        # # ---开始绘图---
+        # plt.figure(figsize=(10, 8))
 
-        # 1. 绘制原始点云
-        plt.scatter(points[:, 0], points[:, 1], s=2, color='blue', alpha=0.5, label='Pointcloud')
+        # # 1. 绘制原始点云
+        # plt.scatter(points[:, 0], points[:, 1], s=2, color='blue', alpha=0.5, label='Pointcloud')
 
-        # 2. 绘制轮廓（红色）
-        used_labels = set()
-        lbl = 'Contour'
-        for contour_real in contours_real:
-            if lbl not in used_labels:
-                contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
-                plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2,label=lbl)
-                used_labels.add(lbl)
-            else:
-                contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
-                plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2)
+        # # 2. 绘制轮廓（红色）
+        # used_labels = set()
+        # lbl = 'Contour'
+        # for contour_real in contours_real:
+        #     if lbl not in used_labels:
+        #         contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+        #         plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2,label=lbl)
+        #         used_labels.add(lbl)
+        #     else:
+        #         contour_plot = np.vstack([contour_real, contour_real[0]])  # 闭合轮廓
+        #         plt.plot(contour_plot[:,0], contour_plot[:,1], color='red', linewidth=2)
 
-        # 3. 绘制测试点
-        point_color = 'green' if is_inside else 'red'
-        plt.scatter(*test_point, color=point_color, s=100, marker='*', label='Test TCP Point')
+        # # 3. 绘制测试点
+        # point_color = 'green' if is_inside else 'red'
+        # plt.scatter(*test_point, color=point_color, s=100, marker='*', label='Test TCP Point')
 
-        # 4. 绘制矩形
-        rect_plot = np.vstack([rect_real, rect_real[0]])  # 闭合矩形
-        plt.plot(rect_plot[:,0], rect_plot[:,1], color='purple', linewidth=2, linestyle='--', label='Test Gripper Bounding Box')
+        # # 4. 绘制矩形
+        # rect_plot = np.vstack([rect_real, rect_real[0]])  # 闭合矩形
+        # plt.plot(rect_plot[:,0], rect_plot[:,1], color='purple', linewidth=2, linestyle='--', label='Test Gripper Bounding Box')
 
-        # 额外标注面积结果
-        centroid = poly_rect.centroid.coords[0]
-        plt.text(centroid[0], centroid[1], f'Area={(max(intersection_areas)*1e4):.2f}', color='purple', fontsize=12, ha='center')
+        # # 额外标注面积结果
+        # centroid = poly_rect.centroid.coords[0]
+        # plt.text(centroid[0], centroid[1], f'Area={(max(intersection_areas)*1e4):.2f}', color='purple', fontsize=12, ha='center')
 
-        # 设置其他显示选项
-        plt.title('Pointcloud, Contour, Test TCP Point, and Test Gripper Bounding Box')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.legend(loc='best')
-        plt.axis('equal')
-        plt.grid(True)
+        # # 设置其他显示选项
+        # plt.title('Pointcloud, Contour, Test TCP Point, and Test Gripper Bounding Box')
+        # plt.xlabel('X')
+        # plt.ylabel('Y')
+        # plt.legend(loc='best')
+        # plt.axis('equal')
+        # plt.grid(True)
 
-        plt.close()
+        # plt.close()
 
         return polygons_2d
 
@@ -1610,12 +1757,77 @@ for iii in range(len(paired_planes)):
     # plane_contour_polygon_list = [polygon_p1,polygon_p2,polygon_p3,polygon_p4]
 
     #********************** Loop Find feasible TCP *********************
+    from shapely.validation import explain_validity, make_valid   # Shapely>=2.0
+    from shapely import set_precision
+    from shapely.geometry import Polygon, Point
+    from shapely.errors import GEOSException
+    from shapely.ops import unary_union
+    GRID_SIZE = 1e-9
+
+    def _clean_geom(geom, name=""):
+        if geom.is_empty:
+            return geom
+
+        g = geom
+
+        # 1) 修复无效
+        if not g.is_valid:
+            g = make_valid(g)
+        if not g.is_valid:
+            g = g.buffer(0)
+
+        # 2) set_precision：放到后面更稳妥
+        try:
+            g = set_precision(g, GRID_SIZE)
+        except Exception as e:
+            print(f"[WARN] set_precision failed on '{name}': {e}")
+
+        # 3) 合并
+        try:
+            if hasattr(g, "geoms"):
+                g = unary_union(g)
+        except Exception:
+            pass
+
+        # 4) 最终有效性检查
+        if not g.is_valid:
+            msg = explain_validity(g)
+            print(f"[WARN] Geometry '{name}' still invalid after cleaning: {msg}")
+
+        return g
+
+    def _safe_intersection_area(a, b):
+        """
+        在交集时启用 grid_size（snap rounding），并在异常时回退到 buffer(0)
+        """
+        try:
+            # Shapely 2.x 的交集允许传 grid_size
+            return a.intersection(b, grid_size=GRID_SIZE).area
+        except GEOSException:
+            a2 = _clean_geom(a, "A@fallback")
+            b2 = _clean_geom(b, "B@fallback")
+            return a2.intersection(b2, grid_size=GRID_SIZE).area
+        
+
     def find_feasible_tcp(plane_contour_polygon_list,all_shapes):
 
         filtered_shapes = []
         feasible_points_on_edge = []
         intersection_areas_on_edge =[]
         min_area = 0.3 * z_pg * b_pg
+
+        # 先把 plane_contour_polygon_list 里的 Polygon 统一成 list，并清洗
+        for i in range(4):
+            lst = plane_contour_polygon_list[i]
+            if isinstance(lst, Polygon):
+                plane_contour_polygon_list[i] = [lst]
+            # 对每个多边形做清洗与设精度
+            plane_contour_polygon_list[i] = [_clean_geom(p, f"plane_poly_{i}") for p in plane_contour_polygon_list[i]]
+
+        poly_0_list = plane_contour_polygon_list[0]
+        poly_1_list = plane_contour_polygon_list[1]
+        poly_2_list = plane_contour_polygon_list[2]
+        poly_3_list = plane_contour_polygon_list[3]
 
         for segment_shapes in all_shapes:
             filtered_segment = []
@@ -1632,16 +1844,6 @@ for iii in range(len(paired_planes)):
                 rect4_geom = Polygon(rectangles[3])  # Robot arm 
                 rect5_geom = Polygon(rectangles[4])  # Gripper Area
                 rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
-
-                for i in range(4):
-                    lst = plane_contour_polygon_list[i]
-                    if isinstance(lst, Polygon):
-                        plane_contour_polygon_list[i] = [lst]
-
-                poly_0_list = plane_contour_polygon_list[0]
-                poly_1_list = plane_contour_polygon_list[1]
-                poly_2_list = plane_contour_polygon_list[2]
-                poly_3_list = plane_contour_polygon_list[3]
 
                 total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_0_list)
 
@@ -1898,14 +2100,16 @@ for iii in range(len(paired_planes)):
                     tcp = tcp[:m]
                     scores = scores[:m]
                     # 尝试根据数据范围设置色条范围
-                    vmin = np.nanmin(scores) if np.isfinite(scores).any() else 0.0
-                    vmax = np.nanmax(scores) if np.isfinite(scores).any() else 1.0
+                    # vmin = np.nanmin(scores) if np.isfinite(scores).any() else 0.0
+                    # vmax = np.nanmax(scores) if np.isfinite(scores).any() else 1.0
+                    vmin = 0.0
+                    vmax = 1.0
                     if vmin == vmax:
                         vmin, vmax = vmax - 1.0, vmax + 1.0
 
                     lbl = 'Feasible TCP Point'
                     scatter_handle = ax.scatter(tcp[:, 0], tcp[:, 1],
-                                                c=scores, cmap='RdYlGn',
+                                                c=scores, cmap='RdYlGn',marker='x',
                                                 vmin=vmin, vmax=vmax, s=10,
                                                 label=(lbl if 'Feasible TCP Point' not in used_labels else None))
                     if 'Feasible TCP Point' not in used_labels:
