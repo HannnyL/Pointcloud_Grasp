@@ -121,6 +121,9 @@ re = params["re"] #robot arm diameter clearance
 rf = params["rf"] #robot arm length clearance
 rj = params["rj"] #repeatability of robot arm
 
+print("Gripper parameters:")
+print(f"a_pg: {a_pg:.3f} m")
+print(f"w_pg: {w_pg:.3f} m")
 # **************************** Aid Functions **************************************
 def filter_by_normal_orientation(
     pcd, n_ref, cos_th=0.965, knn=30, radius=None, max_nn=50
@@ -358,7 +361,7 @@ def orient_normals_outward(
     return pcd
 
 
-path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Verification_examples\01_Bottom_CubeSat_sampled.pcd")
+path = pathlib.Path(r"D:\Codecouldcode\099.MA_Hanyu\Object\Verification_examples\00_CubeSat_Assembly v3_sampled10k.pcd")
 pcd = o3d.io.read_point_cloud(str(path))
 # dists = pcd.compute_nearest_neighbor_distance()
 # avg_d  = np.mean(dists)
@@ -721,6 +724,7 @@ for count, (i, j) in enumerate(paired_planes):
 # iii=11
 counter = 0
 for iii in range(len(paired_planes)):
+# for iii in range(2,3):
     counter+=1  
     print(f"\n\n----------------------------------------\n-------- Processing pair: {counter}/{len(paired_planes)} --------\n----------------------------------------")
 
@@ -733,6 +737,10 @@ for iii in range(len(paired_planes)):
     dist_plane = abs(np.dot(center_i-center_j,plane_normals[mmm]))
 
     print(f"Plane pair distance: {dist_plane:.3f},open:{(f_pg - 2 * w_pg)},close:{g_pg}")
+    obb = pcd.get_oriented_bounding_box()
+    obb_extent = max(obb.extent)
+    print(f"OBB extent:{obb_extent}")
+
     if dist_plane < g_pg:
         print("\n####################\nPlane pair distance is too small, skip\n####################\n")
         continue
@@ -772,12 +780,15 @@ for iii in range(len(paired_planes)):
     pcd_orig_j.paint_uniform_color([0.7, 0.7, 0.7])
 
     o3d.visualization.draw_geometries([
-        pcd,
+        pcd.translate([0,0.001,0]),
         pcd_orig_i,
         pcd_orig_j,
         pcd_proj_i,
         pcd_proj_j
     ], window_name="Plane Projection", width=800, height=600)
+
+    if input("Skip this pair? (y/n)") == "n":
+        continue
 
     #**************************** Plane 1: Project planes and find overlap region ****************************
 
@@ -854,7 +865,7 @@ for iii in range(len(paired_planes)):
     colors[ind_p1,:] = [0,1,0]
     overlap_pcd_unfilter.colors = o3d.utility.Vector3dVector(colors)
 
-    o3d.visualization.draw_geometries([overlap_pcd_unfilter,pcd_orig_i,pcd_orig_j],window_name="Pair of Planes and Their Overlap Region")
+    o3d.visualization.draw_geometries([overlap_pcd_unfilter.translate([0,0,0.00001]),pcd_orig_i,pcd_orig_j],window_name="Pair of Planes and Their Overlap Region")
 
 
     #**************************** Plane 2: Find points between planes ****************************
@@ -863,7 +874,7 @@ for iii in range(len(paired_planes)):
         d = np.dot(v, plane_normal)
         return points - np.outer(d, plane_normal)
 
-    def select_points_between_planes(pcd, center_i, center_j, plane_normal, margin=0.0005, include_planes=True):
+    def select_points_between_planes(pcd, center_i, center_j, plane_normal, margin=0.0015, include_planes=True):
         """
         筛选出完整点云中夹在两个平面之间的点
         """
@@ -921,34 +932,35 @@ for iii in range(len(paired_planes)):
     ],window_name="Pair of Planes and Projected Points Between Them")
 
 
-    #**************************** Plane 3: find outside(finger) collision area ****************************
+    #**************************** Plane 3a,3b: find outside(finger) collision area ****************************
 
-    center_i_p3 = center_i + (y_pg/2) * (plane_normals[mmm]) * dist_dir_i
-    center_j_p3 = center_j + (y_pg/2) * (plane_normals[nnn]) * dist_dir_j
-    # center_i_p3 = center_i + (0.02) * (plane_normals[mmm]) * dist_dir_i
-    # center_j_p3 = center_j + (0.02) * (plane_normals[nnn]) * dist_dir_j
+    #*P3a
+    center_i_p3a = center_i + (a_pg + w_pg + v_pg) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p3a = center_j + (a_pg + w_pg + v_pg) * (plane_normals[nnn]) * dist_dir_j
+    # center_i_p3 = center_ij + (0.02) * (plane_normals[mmm]) * dist_dir_i
+    # center_j_p3 = center_ij + (0.02) * (plane_normals[nnn]) * dist_dir_j
 
     # 1. 筛选出在两个平面之间的点
-    points_between_p3_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3, plane_normals[mmm],False)
-    points_between_p3_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3, plane_normals[nnn],False)
-    points_between_p3 = np.vstack((points_between_p3_i, points_between_p3_j))
+    points_between_p3a_i,points_beside = select_points_between_planes(points_beside, center_i, center_i_p3a, plane_normals[mmm])
+    points_between_p3a_j,points_beside = select_points_between_planes(points_beside, center_j, center_j_p3a, plane_normals[nnn])
+    points_between_p3a = np.vstack((points_between_p3a_i, points_between_p3a_j))
 
     # 2. 投影到中间平面
-    projected_points_p3 = project_points_to_plane(points_between_p3, center_ij, plane_normals[mmm])
+    projected_points_p3a = project_points_to_plane(points_between_p3a, center_ij, plane_normals[mmm])
 
     # 3. 创建 PointCloud 对象
-    proj_pcd_p3_unfilter = o3d.geometry.PointCloud()
-    proj_pcd_p3_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3)
-    proj_pcd_p3_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
+    proj_pcd_p3a_unfilter = o3d.geometry.PointCloud()
+    proj_pcd_p3a_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3a)
+    # proj_pcd_p3a_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
 
-    proj_pcd_p3,ind_p3 = remove_pcd_outlier_dbscan(proj_pcd_p3_unfilter)
-    projected_points_p3 = np.asarray(proj_pcd_p3.points)
+    proj_pcd_p3a,ind_p3a = remove_pcd_outlier_dbscan(proj_pcd_p3a_unfilter)
+    projected_points_p3a = np.asarray(proj_pcd_p3a.points)
 
-    o3d.io.write_point_cloud("proj_pcd_p3.pcd", proj_pcd_p3)
+    o3d.io.write_point_cloud("proj_pcd_p3a.pcd", proj_pcd_p3a)
 
-    colors = np.ones((len(proj_pcd_p3_unfilter.points), 3)) * [1,1,0]
-    colors[ind_p3,:] = [0,0,1]
-    proj_pcd_p3_unfilter.colors = o3d.utility.Vector3dVector(colors)
+    colors = np.ones((len(proj_pcd_p3a_unfilter.points), 3)) * [1,1,0]
+    colors[ind_p3a,:] = [0,0,1]
+    proj_pcd_p3a_unfilter.colors = o3d.utility.Vector3dVector(colors)
 
     #平面中心
     # sphere1 = o3d.geometry.TriangleMesh.create_sphere(radius=0.005)
@@ -976,19 +988,54 @@ for iii in range(len(paired_planes)):
     # o3d.visualization.draw_geometries([pcd,aaaa,bbbb])
     # 可视化所有内容
     # o3d.visualization.draw_geometries([candidate_TCP_pcd, proj_pcd_outside,sphere1,sphere2,sphere3,sphere4])
-    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3_unfilter.translate([0,0,0.0001])],window_name="Initial TCP & Finger Collision Area (P3)")
+    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3a_unfilter.translate([0,0,0.0001])],window_name="Initial TCP & Finger Collision Area (P3a)")
+
+    #*P3b
+    center_i_p3b = center_ij + (y_pg/2) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p3b = center_ij + (y_pg/2) * (plane_normals[nnn]) * dist_dir_j
+    # center_i_p3 = center_ij + (0.02) * (plane_normals[mmm]) * dist_dir_i
+    # center_j_p3 = center_ij + (0.02) * (plane_normals[nnn]) * dist_dir_j
+
+    # 1. 筛选出在两个平面之间的点
+    points_between_p3b_i,points_beside = select_points_between_planes(points_beside, center_i_p3a, center_i_p3b, plane_normals[mmm])
+    points_between_p3b_j,points_beside = select_points_between_planes(points_beside, center_j_p3a, center_j_p3b, plane_normals[nnn])
+    points_between_p3b = np.vstack((points_between_p3b_i, points_between_p3b_j))
+
+    # 2. 投影到中间平面
+    projected_points_p3b = project_points_to_plane(points_between_p3b, center_ij, plane_normals[mmm])
+
+    # 3. 创建 PointCloud 对象
+    proj_pcd_p3b_unfilter = o3d.geometry.PointCloud()
+    proj_pcd_p3b_unfilter.points = o3d.utility.Vector3dVector(projected_points_p3b)
+    # proj_pcd_p3b_unfilter.paint_uniform_color([0, 0, 1])  # 蓝色
+
+    proj_pcd_p3b,ind_p3b = remove_pcd_outlier_dbscan(proj_pcd_p3b_unfilter)
+    projected_points_p3b = np.asarray(proj_pcd_p3b.points)
+
+    o3d.io.write_point_cloud("proj_pcd_p3b.pcd", proj_pcd_p3b)
+
+    colors = np.ones((len(proj_pcd_p3b_unfilter.points), 3)) * [1,1,0]
+    colors[ind_p3b,:] = [0,0.5,1]
+    proj_pcd_p3b_unfilter.colors = o3d.utility.Vector3dVector(colors)
+
+    o3d.visualization.draw_geometries([overlap_pcd,proj_pcd_p3a_unfilter.translate([0,0,-0.0001]), proj_pcd_p3b_unfilter.translate([0,0,0.0001])],window_name="Initial TCP & Finger Collision Area (P3a+P3b)")
 
     ##**************************** Plane 4: find beside collision area ****************************
 
-    points_between_p4_i,points_beside = select_points_between_planes(points_beside, center_i_p3, center_j_p3, plane_normals[mmm],False)
+    center_i_p4 = center_i + ((rd + rj)/2) * (plane_normals[mmm]) * dist_dir_i
+    center_j_p4 = center_j + ((rd + rj)/2) * (plane_normals[nnn]) * dist_dir_j
+
+    points_between_p4_i,points_beside = select_points_between_planes(points_beside, center_i_p3b, center_i_p4, plane_normals[mmm])
+    points_between_p4_j,points_beside = select_points_between_planes(points_beside, center_j_p3b, center_j_p4, plane_normals[nnn])
+    points_between_p4 = np.vstack((points_between_p4_i, points_between_p4_j))
     
-    projected_points_p4 = project_points_to_plane(points_beside, center_ij, plane_normals[mmm])
+    projected_points_p4 = project_points_to_plane(points_between_p4, center_ij, plane_normals[mmm])
 
 
     # 3. 创建 PointCloud 对象
     proj_pcd_p4_unfilter = o3d.geometry.PointCloud()
     proj_pcd_p4_unfilter.points = o3d.utility.Vector3dVector(projected_points_p4)
-    proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])  # 蓝色
+    proj_pcd_p4_unfilter.paint_uniform_color([0, 1, 1])
 
     proj_pcd_p4,ind_p4 = remove_pcd_outlier_dbscan(proj_pcd_p4_unfilter)
     # proj_pcd_p4.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
@@ -1000,22 +1047,37 @@ for iii in range(len(paired_planes)):
     proj_pcd_p4_unfilter.colors = o3d.utility.Vector3dVector(colors)
 
 
-    points_between_p22 = o3d.geometry.PointCloud()
-    points_between_p22.points = o3d.utility.Vector3dVector(points_between_p2)
-    points_between_p22.paint_uniform_color([1, 0, 0])  # 红色
+    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3a.translate([0,0,0.0001]), proj_pcd_p3b.translate([0,0,0.0002]), proj_pcd_p4_unfilter.translate([0,0,-0.0001])],window_name="Initial TCP & Finger Collision Area (P3a+P3b) & Robot Collision Area (P4)")
 
-    points_between_p33 = o3d.geometry.PointCloud()
-    points_between_p33.points = o3d.utility.Vector3dVector(points_between_p3)
-    points_between_p33.paint_uniform_color([0, 0, 1])  # 蓝色
+    #********************** SHOW P1 P2 P3a P3b P4 WITH PCD ****************
 
-    points_beside_p4 = o3d.geometry.PointCloud()
-    points_beside_p4.points = o3d.utility.Vector3dVector(points_beside)
-    points_beside_p4.paint_uniform_color([0, 1, 1])  # 青色
+    pcd_between_p22 = o3d.geometry.PointCloud()
+    pcd_between_p22.points = o3d.utility.Vector3dVector(points_between_p2)
+    pcd_between_p22.paint_uniform_color([1, 0, 0])  # 红色
 
-    o3d.visualization.draw_geometries([points_between_p22, points_between_p33.translate([0,0,0.0001]), points_beside_p4.translate([0,0,-0.0001])],window_name="P2 P3 P4 in 3D")
+    pcd_between_p33a = o3d.geometry.PointCloud()
+    pcd_between_p33a.points = o3d.utility.Vector3dVector(points_between_p3a)
+    pcd_between_p33a.paint_uniform_color([0, 0, 1])  # 蓝色
 
+    pcd_between_p33b = o3d.geometry.PointCloud()
+    pcd_between_p33b.points = o3d.utility.Vector3dVector(points_between_p3b)
+    pcd_between_p33b.paint_uniform_color([0, 0.5, 1])  # 蓝色
 
-    o3d.visualization.draw_geometries([overlap_pcd, proj_pcd_p3.translate([0,0,0.0001]), proj_pcd_p4_unfilter.translate([0,0,-0.0001])],window_name="Initial TCP & Finger Collision Area & Robot Collision Area (P4)")
+    pcd_beside_p4 = o3d.geometry.PointCloud()
+    pcd_beside_p4.points = o3d.utility.Vector3dVector(points_beside)
+    pcd_beside_p4.paint_uniform_color([0, 1, 1])  # 青色
+
+    o3d.visualization.draw_geometries([pcd_between_p22, pcd_between_p33a.translate([0,0,0.0001]), pcd_between_p33b.translate([0,0,0.0002]), pcd_beside_p4.translate([0,0,-0.0001])],window_name="PCD [P2 P3a P3b P4] in 3D")
+
+    #*Show projected points on P1 P2 P3a P3b P4 with assemble PCD in 3D
+
+    pcd.paint_uniform_color([0.7, 0.7, 0.7])
+
+    o3d.visualization.draw_geometries([pcd, overlap_pcd.translate([0,0,0.0001])],window_name="PCD+P1")
+    o3d.visualization.draw_geometries([pcd, proj_pcd_p2.translate([0,0,0.0001])],window_name="PCD+P2")
+    o3d.visualization.draw_geometries([pcd, proj_pcd_p3a.translate([0,0,-0.0001])],window_name="PCD+P3a")
+    o3d.visualization.draw_geometries([pcd, proj_pcd_p3b.translate([0,0,-0.0001])],window_name="PCD+P3b")
+    o3d.visualization.draw_geometries([pcd, proj_pcd_p4.translate([0,0,-0.0001])],window_name="PCD+P4")
 
     #**************************** P2: Find contours ****************************
 
@@ -1040,7 +1102,7 @@ for iii in range(len(paired_planes)):
 
         # 选择较大的边作为基准，统一缩放为 target_size
         scale = target_size / np.max(ranges)
-        return scale
+        return 1
     #-----------------------chat-cv2------------------------
 
     def extract_and_visualize_contour_segments_with_normals(pcd, scale=1500, approx_eps_ratio=0.01):
@@ -1274,19 +1336,19 @@ for iii in range(len(paired_planes)):
             # 原始线段
             lbl = 'Edges of Plane2'
             if lbl not in used_labels:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2, label=lbl)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3, label=lbl)
                 used_labels.add(lbl)
             else:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=2)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3)
 
             # 矩形区域（闭合）
             rect = np.array(rect + [rect[0]])
             lbl = 'Initial TCP Box'
             if lbl not in used_labels:
-                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1, label=lbl)
+                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5, label=lbl)
                 used_labels.add(lbl)
             else:
-                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=1)
+                ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5)
 
             # 网格点
             grids = np.array(grids)
@@ -1356,17 +1418,17 @@ for iii in range(len(paired_planes)):
                     ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
                     
                 if lbl not in used_labels:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1,label=lbl)
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3,label=lbl)
                     used_labels.add(lbl)
                 else:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3)
 
 
 
 
             # 当前的矩形：绿色
             rect = np.array(rectangles[i] + [rectangles[i][0]])
-            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='Initial TCP Box')
+            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5, label='Initial TCP Box')
 
             # 当前的 grid 点：红色
             grids = np.array(grid_points[i])
@@ -1489,10 +1551,10 @@ for iii in range(len(paired_planes)):
                 rect = np.array(tcp_box[i] + [tcp_box[i][0]])
                 lbl = 'Initial TCP Box'
                 if lbl not in used_labels:
-                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label=lbl)
+                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5, label=lbl)
                     used_labels.add(lbl)
                 else:
-                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2)
+                    ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5)
 
                 # 当前测试点
                 pt = shape['point']
@@ -1751,7 +1813,8 @@ for iii in range(len(paired_planes)):
     plane_contour_polygon_list = [
         get_plane_contour_polygon(overlap_pcd,dir1,dir2,center),
         get_plane_contour_polygon(proj_pcd_p2,dir1,dir2,center),
-        get_plane_contour_polygon(proj_pcd_p3,dir1,dir2,center),
+        get_plane_contour_polygon(proj_pcd_p3a,dir1,dir2,center),
+        get_plane_contour_polygon(proj_pcd_p3b,dir1,dir2,center),
         get_plane_contour_polygon(proj_pcd_p4,dir1,dir2,center),
         ]
 
@@ -1815,20 +1878,22 @@ for iii in range(len(paired_planes)):
         filtered_shapes = []
         feasible_points_on_edge = []
         intersection_areas_on_edge =[]
-        min_area = 0.3 * z_pg * b_pg
+        min_area = 0.15 * (z_pg-2*rj) * (b_pg-2*rj)
 
         # 先把 plane_contour_polygon_list 里的 Polygon 统一成 list，并清洗
-        for i in range(4):
+        for i in range(5):
             lst = plane_contour_polygon_list[i]
             if isinstance(lst, Polygon):
                 plane_contour_polygon_list[i] = [lst]
             # 对每个多边形做清洗与设精度
             plane_contour_polygon_list[i] = [_clean_geom(p, f"plane_poly_{i}") for p in plane_contour_polygon_list[i]]
 
-        poly_0_list = plane_contour_polygon_list[0]
-        poly_1_list = plane_contour_polygon_list[1]
-        poly_2_list = plane_contour_polygon_list[2]
-        poly_3_list = plane_contour_polygon_list[3]
+        poly_p1_list = plane_contour_polygon_list[0]
+        poly_p2_list = plane_contour_polygon_list[1]
+        poly_p3a_list = plane_contour_polygon_list[2]
+        poly_p3b_list = plane_contour_polygon_list[3]        
+        poly_p4_list = plane_contour_polygon_list[4]
+
 
         for segment_shapes in all_shapes:
             filtered_segment = []
@@ -1846,24 +1911,27 @@ for iii in range(len(paired_planes)):
                 rect5_geom = Polygon(rectangles[4])  # Gripper Area
                 rect6_geom = Polygon(rectangles[5])  # Robot back sapace Box
 
-                total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_0_list)
+                total_intersection_areas = sum(poly.intersection(rect5_geom).area for poly in poly_p1_list)
 
                 # condition_1 = any(poly.contains(p oint_geom) for poly in poly_0_list)
-                condition_2 = total_intersection_areas > min_area 
-                condition_3 = all(
+                condition_1 = total_intersection_areas > min_area 
+                condition_2 = all(
                     not poly.intersects(rect3_geom) and not poly.intersects(rect4_geom)
-                    for poly in poly_1_list
+                    for poly in poly_p2_list
+                )
+                condition_3 = all(
+                    not poly.intersects(rect1_geom) and
+                    not poly.intersects(rect2_geom)
+                    for poly in poly_p3a_list 
                 )
                 condition_4 = all(
-                    not poly.intersects(rect1_geom) and
-                    not poly.intersects(rect2_geom) and
                     not poly.intersects(rect3_geom) and
                     not poly.intersects(rect4_geom)
-                    for poly in poly_2_list
+                    for poly in poly_p3b_list
                 )
-                condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_3_list)
+                condition_5 = all(not poly.intersects(rect4_geom) for poly in poly_p4_list)
 
-                if  condition_2 and condition_3 and condition_4 and condition_5:
+                if  condition_1 and condition_2 and condition_3 and condition_4 and condition_5:
                     filtered_segment.append(shape)
                     feasible_point.append(pt)
                     intersection_areas.append(total_intersection_areas)
@@ -1953,38 +2021,74 @@ for iii in range(len(paired_planes)):
         area_scores = []
         max_area = max((z_pg - 2*rj) * (b_pg - 2*rj), 1e-9)  # avoid 0
         for areas in intersection_areas:
-            scores = []
-            for a in areas:
-                scores.append(1.0 if a > max_area else (a / max_area))
-            area_scores.append(scores)
+            arr = np.asarray(areas, dtype=float)
+            s = (arr - 0.15*max_area) / (0.85*max_area)
+            s = np.clip(s, 0.0, 1.0)  # a<0.15*max -> 0；a>max -> 1
+            area_scores.append(s)
         return area_scores
 
 
-    def get_center_score(TCP_points, center_guess, dir1, dir2, center):
-        """
-        For each segment i, returns a list of center-based scores (one per feasible TCP point).
-        Closer to the projected center => higher score (normalized to [0,1]).
-        """
-        center_guess = np.asarray(center_guess, dtype=float)
-        center = np.asarray(center, dtype=float)
-        # project the 3D center into the same 2D basis as TCP_points
-        basis = np.vstack([dir1, dir2]).T  # shape (3,2) or (2,2) depending on your setup
-        center_local = np.dot(center_guess - center, basis)
+    # def get_center_score(TCP_points, center_pcd, dir1, dir2, center):
+    #     """
+    #     For each segment i, returns a list of center-based scores (one per feasible TCP point).
+    #     Closer to the projected center => higher score (normalized to [0,1]).
+    #     """
+    #     center_pcd = np.asarray(center_pcd, dtype=float)
+    #     center = np.asarray(center, dtype=float)
+    #     # project the 3D center into the same 2D basis as TCP_points
+    #     basis = np.vstack([dir1, dir2]).T  # shape (3,2) or (2,2) depending on your setup
+    #     center_local = np.dot(center_pcd - center, basis)
 
-        center_scores = []
-        eps = 1e-12
+    #     center_scores = []
+    #     eps = 1e-12
+    #     for pts in TCP_points:
+    #         if not pts:                 # no feasible points on this segment
+    #             center_scores.append([])
+    #             continue
+    #         pts_np = np.asarray(pts, dtype=float).reshape(-1, 2)
+    #         d = np.linalg.norm(pts_np - center_local, axis=1)
+    #         if d.max() - d.min() < eps:
+    #             scores = np.ones_like(d)      # all same distance -> give all 1.0
+    #         else:
+    #             scores = 1.0 - (d - d.min()) / (d.max() - d.min())
+    #         center_scores.append(scores.tolist())
+    #     return center_scores
+
+    def get_center_score(TCP_points, center_pcd, dir1, dir2, center):
+
+        center_pcd = np.asarray(center_pcd, dtype=float)
+        center = np.asarray(center, dtype=float)
+        dir1 = np.asarray(dir1, dtype=float)
+        dir2 = np.asarray(dir2, dtype=float)
+
+        basis = np.vstack([dir1, dir2])
+        
+        TCP_points_dist = []
+        
         for pts in TCP_points:
-            if not pts:                 # no feasible points on this segment
-                center_scores.append([])
+            if not pts:
+                TCP_points_dist.append(np.array([],dtype=float))
                 continue
-            pts_np = np.asarray(pts, dtype=float).reshape(-1, 2)
-            d = np.linalg.norm(pts_np - center_local, axis=1)
-            if d.max() - d.min() < eps:
-                scores = np.ones_like(d)      # all same distance -> give all 1.0
-            else:
-                scores = 1.0 - (d - d.min()) / (d.max() - d.min())
-            center_scores.append(scores.tolist())
-        return center_scores
+            uv = np.asarray(pts, dtype=float).reshape(-1, 2)
+            p_3d = center + uv @ basis
+            dist = np.linalg.norm(p_3d - center_pcd,axis=1)
+            TCP_points_dist.append(dist)
+
+
+        non_empty = [d for d in TCP_points_dist if d.size > 0]
+        if len(non_empty) == 0:
+            return [d.copy() for d in TCP_points_dist]
+        max_dist = np.max([np.max(d) for d in non_empty])
+
+        if max_dist == 0:
+        # all points are the same at center of mass -> give all 1.0
+            TCP_dist_scores = [np.ones_like(d) for d in TCP_points_dist]
+        else:
+            TCP_dist_scores = [(1.0 - d/max_dist) for d in TCP_points_dist]
+
+        return TCP_dist_scores
+
+
 
 
     def rank_feasible_tcp(feasible_TCP, intersection_areas):
@@ -2031,7 +2135,7 @@ for iii in range(len(paired_planes)):
 
             # 所有线段：蓝色
             used_labels = set()
-            lbl = 'Coutours of Plane'
+            lbl = 'Coutours of Plane 2'
             for j, (pt1, pt2) in enumerate(segments_2d):
 
                 if j == i:
@@ -2150,10 +2254,10 @@ for iii in range(len(paired_planes)):
             # 1) 线段-蓝色
             lbl = 'Contours on Plane'
             if lbl not in used_labels:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2, label=lbl)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3, label=lbl)
                 used_labels.add(lbl)
             else:
-                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1.2)
+                ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3)
 
             # 2) TCP 点-按分数着色
             tcp = np.asarray(tcp) if tcp is not None else np.empty((0,2))
@@ -2180,7 +2284,7 @@ for iii in range(len(paired_planes)):
                     lbl = 'Feasible TCP Point'
                     scatter_handle = ax.scatter(tcp[:, 0], tcp[:, 1],
                                                 c=scores, cmap='RdYlGn',marker='x',
-                                                vmin=vmin, vmax=vmax, s=10,
+                                                vmin=vmin, vmax=vmax, s=20,
                                                 label=(lbl if 'Feasible TCP Point' not in used_labels else None))
                     if 'Feasible TCP Point' not in used_labels:
                         used_labels.add('Feasible TCP Point')
@@ -2194,10 +2298,10 @@ for iii in range(len(paired_planes)):
                 rect_closed = np.vstack([rect, rect[0]])
                 lbl = 'TCP Box'
                 if lbl not in used_labels:
-                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.5, label=lbl)
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=0.5, label=lbl)
                     used_labels.add(lbl)
                 else:
-                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=1.0)
+                    ax.plot(rect_closed[:, 0], rect_closed[:, 1], 'g--', linewidth=0.5)
 
         ax.set_xlim(min_xy[0], max_xy[0])
         ax.set_ylim(min_xy[1], max_xy[1])

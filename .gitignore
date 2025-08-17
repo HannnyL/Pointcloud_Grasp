@@ -31,3 +31,7 @@ profile_results_whole_object_no_plot_bumped_cube_100k.txt
 01_project/delect.py
 out/
 01_project/load_pcd.py
+01_project/test_.py
+plane_indices.npy
+plane_indices_2.npy
+01_project/with part pts and assemble pts.py
