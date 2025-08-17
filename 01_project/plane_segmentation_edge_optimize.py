@@ -776,8 +776,8 @@ for iii in range(len(paired_planes)):
     pcd_orig_i = pcd.select_by_index(plane_indices_list[mmm])
     pcd_orig_j = pcd.select_by_index(plane_indices_list[nnn])
 
-    pcd_orig_i.paint_uniform_color([0.7, 0.7, 0.7])  # 淡灰色
-    pcd_orig_j.paint_uniform_color([0.7, 0.7, 0.7])
+    pcd_orig_i.paint_uniform_color([0.85, 0.85, 0.85])  # 淡灰色
+    pcd_orig_j.paint_uniform_color([0.85, 0.85, 0.85])
 
     o3d.visualization.draw_geometries([
         pcd.translate([0,0.001,0]),
@@ -787,7 +787,7 @@ for iii in range(len(paired_planes)):
         pcd_proj_j
     ], window_name="Plane Projection", width=800, height=600)
 
-    if input("Skip this pair? (y/n)") == "n":
+    if input("Skip this pair? (y/n)") == "y":
         continue
 
     #**************************** Plane 1: Project planes and find overlap region ****************************
@@ -1071,7 +1071,7 @@ for iii in range(len(paired_planes)):
 
     #*Show projected points on P1 P2 P3a P3b P4 with assemble PCD in 3D
 
-    pcd.paint_uniform_color([0.7, 0.7, 0.7])
+    pcd.paint_uniform_color([0.85, 0.85, 0.85])
 
     o3d.visualization.draw_geometries([pcd, overlap_pcd.translate([0,0,0.0001])],window_name="PCD+P1")
     o3d.visualization.draw_geometries([pcd, proj_pcd_p2.translate([0,0,0.0001])],window_name="PCD+P2")
@@ -1238,8 +1238,8 @@ for iii in range(len(paired_planes)):
                 idx = len(line_segments_3d)
                 line_segments_3d.extend([pt1_3d, pt2_3d])
                 line_indices.append([idx, idx + 1])
-                color = plt.cm.hsv(i / len(points_2d_back))[:3]
-                line_colors.append(color)
+                # color = plt.cm.hsv(i / len(points_2d_back))[:3]
+                # line_colors.append(color)
 
             # 构建所有线段
             if len(line_indices) == 0:
@@ -1249,17 +1249,17 @@ for iii in range(len(paired_planes)):
             line_set = o3d.geometry.LineSet()
             line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
             line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
-            line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
+            # line_set.colors = o3d.utility.Vector3dVector(np.asarray(line_colors, dtype=float))
 
         # 使用Open3D可视化所有轮廓
         o3d.visualization.draw_geometries([pcd, line_set],window_name="P2 Contour Lines + Normals",width=1280, height=800)
 
-        return line_segments_2d, line_normals_2d, dir1, dir2, center
+        return line_segments_2d, line_normals_2d, dir1, dir2, center, [line_segments_3d,line_indices]
 
 
     contour_segments_2d_p2 = []
     contour_normals_2d_p2 = []
-    contour_segments_2d_p2,contour_normals_2d_p2,dir1,dir2,center = extract_and_visualize_contour_segments_with_normals(proj_pcd_p2, scale=1500, approx_eps_ratio=0.01)
+    contour_segments_2d_p2,contour_normals_2d_p2,dir1,dir2,center, contour_segments_3d_p2_para = extract_and_visualize_contour_segments_with_normals(proj_pcd_p2, scale=1500, approx_eps_ratio=0.01)
 
 
     # **************************** Find and Show Initial TCP Box & Test Grid Point ****************************
@@ -1734,7 +1734,7 @@ for iii in range(len(paired_planes)):
             linesets.append(line_set)
 
         # 原始点云设置颜色便于观察
-        pcd.paint_uniform_color([0.5, 0.5, 0.5])
+        pcd.paint_uniform_color([0.7, 0.7, 0.7])
 
         # 使用Open3D可视化所有轮廓
         o3d.visualization.draw_geometries([pcd, *linesets], window_name='Plane Contours 3D View')
@@ -2017,6 +2017,24 @@ for iii in range(len(paired_planes)):
 
     #*********************** Ranking function ******************************************
 
+    def project_pts_to_3d(points, center, dir1, dir2): 
+        center = np.asarray(center, dtype=float)
+        dir1 = np.asarray(dir1, dtype=float)
+        dir2 = np.asarray(dir2, dtype=float)  
+
+        basis = np.vstack([dir1, dir2])     
+        points_list_3d = []
+
+        for pts in points:
+            if not pts:
+                points_list_3d.append(np.array([],dtype=float))
+                continue
+            uv = np.asarray(pts, dtype=float).reshape(-1, 2)
+            p_3d = center + uv @ basis
+            points_list_3d.append(p_3d) 
+
+        return points_list_3d
+
     def get_area_score(intersection_areas):
         area_scores = []
         max_area = max((z_pg - 2*rj) * (b_pg - 2*rj), 1e-9)  # avoid 0
@@ -2054,24 +2072,16 @@ for iii in range(len(paired_planes)):
     #         center_scores.append(scores.tolist())
     #     return center_scores
 
-    def get_center_score(TCP_points, center_pcd, dir1, dir2, center):
+    def get_center_score(TCP_points, center_pcd):
 
         center_pcd = np.asarray(center_pcd, dtype=float)
-        center = np.asarray(center, dtype=float)
-        dir1 = np.asarray(dir1, dtype=float)
-        dir2 = np.asarray(dir2, dtype=float)
-
-        basis = np.vstack([dir1, dir2])
-        
         TCP_points_dist = []
         
         for pts in TCP_points:
-            if not pts:
+            if pts.size == 0:
                 TCP_points_dist.append(np.array([],dtype=float))
                 continue
-            uv = np.asarray(pts, dtype=float).reshape(-1, 2)
-            p_3d = center + uv @ basis
-            dist = np.linalg.norm(p_3d - center_pcd,axis=1)
+            dist = np.linalg.norm(pts - center_pcd,axis=1)
             TCP_points_dist.append(dist)
 
 
@@ -2097,7 +2107,9 @@ for iii in range(len(paired_planes)):
         means = np.mean(original_points, axis=0)
 
         area_scores = get_area_score(intersection_areas)                      # list[list[float]]
-        center_scores = get_center_score(feasible_TCP, means, dir1, dir2, center)  # list[list[float]]
+
+        tcp_3d = project_pts_to_3d(feasible_TCP, center, dir1, dir2)
+        center_scores = get_center_score(tcp_3d, means)  # list[list[float]]
 
         ranked = []
         for c_seg, a_seg in zip(center_scores, area_scores):
@@ -2312,3 +2324,51 @@ for iii in range(len(paired_planes)):
         plt.show()
 
     highlight_feasible_all_tcp(feasible_TCP,feasible_TCP_rank,contour_segments_2d_p2,tcp_box)
+
+
+    def show_feasible_tcp_in_3d(TCP_3d, TCP_rank, segments_3d_para, pcd_pa, pcd_pb, pcd):
+        
+        # for pts in TCP_3d:
+        #     if len(pts) == 0:
+        #         print("No feasible TCP found to show in 3D!")
+        #         return
+        #     else:
+        #         continue
+
+        line_segments_3d,line_indices = segments_3d_para
+
+        # 构建所有线段
+        if len(line_indices) == 0:
+            print("没有可视化的线段（可能轮廓太小或被过度简化）")
+            return
+        
+        blue = np.array([[0, 0, 1] for _ in range(len(TCP_3d))], dtype=float)
+
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(np.asarray(line_segments_3d, dtype=float))
+        line_set.lines = o3d.utility.Vector2iVector(np.asarray(line_indices, dtype=np.int32))
+        line_set.colors = o3d.utility.Vector3dVector(blue)
+
+        
+        # TCP_3d = np.asarray(TCP_3d, dtype=float)
+        # TCP_rank = np.asarray(TCP_rank, dtype=float)
+
+        # TCP_3d_flat = np.vstack(TCP_3d)
+        # TCP_rank_flat = np.vstack(TCP_rank)
+
+        TCP_3d_flat = [p for group in TCP_3d for p in group]
+        TCP_rank_flat = [r for group in TCP_rank for r in group]
+
+        colors = plt.cm.RdYlGn(np.asarray(TCP_rank_flat, dtype=float))[:, :3]
+
+        pcd_tcp = o3d.geometry.PointCloud()
+        pcd_tcp.points = o3d.utility.Vector3dVector(TCP_3d_flat)
+        pcd_tcp.colors = o3d.utility.Vector3dVector(colors)
+
+        o3d.visualization.draw_geometries([pcd_tcp, pcd_pa, pcd_pb, line_set],window_name='Feasible TCP in 3D with PA and PB')
+
+        o3d.visualization.draw_geometries([pcd_tcp, pcd, line_set],window_name='Feasible TCP in 3D wit assembled part')
+
+
+    feasible_TCP_3d = project_pts_to_3d(feasible_TCP, center, dir1, dir2)
+    show_feasible_tcp_in_3d(feasible_TCP_3d, feasible_TCP_rank, contour_segments_3d_p2_para, pcd_orig_i, pcd_orig_j, pcd)
