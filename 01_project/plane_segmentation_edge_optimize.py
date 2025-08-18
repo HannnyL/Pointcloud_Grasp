@@ -124,6 +124,17 @@ rj = params["rj"] #repeatability of robot arm
 print("Gripper parameters:")
 print(f"a_pg: {a_pg:.3f} m")
 print(f"w_pg: {w_pg:.3f} m")
+
+#***************** Code parameters **********
+tilt_symbol_start_dist = 18
+tilt_symbol_handle_length = 15
+tilt_symbol_finger_width_half = 5
+tilt_symbol_finger_end_length = 8
+
+plt_graphic_space = 10
+#*******************************************
+
+
 # **************************** Aid Functions **************************************
 def filter_by_normal_orientation(
     pcd, n_ref, cos_th=0.965, knn=30, radius=None, max_nn=50
@@ -303,11 +314,6 @@ def remove_pcd_outlier_dbscan(pcd, eps=0.007, min_samples=20,min_cluster_ratio=0
 
 # **************************** Step 1: 读取点云+外法线估计 ****************************
 point_cloud_path = r"D:\Codecouldcode\099.MA_Hanyu\Object\Bump Cube_sampled.pcd"  # ← 修改为你的点云文件
-normal_radius = 0.05
-curvature_radius = 0.05
-dbscan_eps = 0.1
-dbscan_min_samples = 20
-local_k = 20  # 用于局部一致性纠正的邻域点数
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -1376,8 +1382,8 @@ for iii in range(len(paired_planes)):
         始终显示所有线段，只高亮当前索引对应的矩形与网格点。
         """
         all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
-        min_xy = all_pts.min(axis=0) - 0.025
-        max_xy = all_pts.max(axis=0) + 0.025
+        min_xy = all_pts.min(axis=0) - plt_graphic_space
+        max_xy = all_pts.max(axis=0) + plt_graphic_space
 
 
         for i in range(len(segments_2d)):
@@ -1405,12 +1411,12 @@ for iii in range(len(paired_planes)):
                     # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
 
                     #tilt symbol
-                    start_point_line = mid - normal_clockwise_90 * 0.018
-                    end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                    end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
-                    end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
-                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+                    start_point_line = mid - normal_clockwise_90 * tilt_symbol_start_dist
+                    end_point_line = start_point_line + normal_clockwise_90 * tilt_symbol_handle_length
+                    end_point_base1 = end_point_line + vec_12 * tilt_symbol_finger_width_half - normal_clockwise_90 * tilt_symbol_finger_width_half
+                    end_point_base2 = end_point_line - vec_12 * tilt_symbol_finger_width_half + normal_clockwise_90 * tilt_symbol_finger_width_half
+                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * tilt_symbol_finger_end_length
+                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * tilt_symbol_finger_end_length
 
                     ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
                     ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
@@ -1528,8 +1534,8 @@ for iii in range(len(paired_planes)):
     def show_gripper_bounding_box(segments_2d, tcp_box, shapes):
         all_pts = [pt for seg in segments_2d for pt in seg]
         bounds = np.array(all_pts)
-        min_xy = bounds.min(axis=0) - 0.01
-        max_xy = bounds.max(axis=0) + 0.01
+        min_xy = bounds.min(axis=0) - plt_graphic_space
+        max_xy = bounds.max(axis=0) + plt_graphic_space
 
         for i, segment_shape in enumerate(shapes):
             for j, shape in enumerate(segment_shape):
@@ -2137,8 +2143,8 @@ for iii in range(len(paired_planes)):
         """
 
         all_pts = np.array(list(itertools.chain.from_iterable(segments_2d)))
-        min_xy = all_pts.min(axis=0) - 0.02
-        max_xy = all_pts.max(axis=0) + 0.02
+        min_xy = all_pts.min(axis=0) - plt_graphic_space
+        max_xy = all_pts.max(axis=0) + plt_graphic_space
 
 
         for i,pt in enumerate(TCP_points):
@@ -2166,12 +2172,12 @@ for iii in range(len(paired_planes)):
                     # end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
 
                     #tilt symbol
-                    start_point_line = mid - normal_clockwise_90 * 0.018
-                    end_point_line = start_point_line + normal_clockwise_90 * 0.015
-                    end_point_base1 = end_point_line + vec_12 * 0.005 - normal_clockwise_90 * 0.005
-                    end_point_base2 = end_point_line - vec_12 * 0.005 + normal_clockwise_90 * 0.005
-                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * 0.008
-                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * 0.008
+                    start_point_line = mid - normal_clockwise_90 * tilt_symbol_start_dist
+                    end_point_line = start_point_line + normal_clockwise_90 * tilt_symbol_handle_length
+                    end_point_base1 = end_point_line + vec_12 * tilt_symbol_finger_width_half - normal_clockwise_90 * tilt_symbol_finger_width_half
+                    end_point_base2 = end_point_line - vec_12 * tilt_symbol_finger_width_half + normal_clockwise_90 * tilt_symbol_finger_width_half
+                    end_point_finger1 = end_point_base1 + normal_clockwise_90 * tilt_symbol_finger_end_length
+                    end_point_finger2 = end_point_base2 + normal_clockwise_90 * tilt_symbol_finger_end_length
 
                     ax.plot([start_point_line[0], end_point_line[0]], [start_point_line[1], end_point_line[1]], 'm', linewidth=1.5,label='Gripper Direction')
                     ax.plot([end_point_base1[0], end_point_base2[0]], [end_point_base1[1], end_point_base2[1]], 'm', linewidth=1.5)
@@ -2179,10 +2185,10 @@ for iii in range(len(paired_planes)):
                     ax.plot([end_point_base2[0], end_point_finger2[0]], [end_point_base2[1], end_point_finger2[1]], 'm', linewidth=1.5)
                     
                 if lbl not in used_labels:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1, label=lbl)
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3, label=lbl)
                     used_labels.add(lbl)
                 else:
-                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=1)
+                    ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], 'b-', linewidth=3)
 
             # 当前点：绿色点
             pt = np.array(pt).reshape(-1, 2)
@@ -2208,7 +2214,7 @@ for iii in range(len(paired_planes)):
 
             # 当前矩形框（rectangles[0]）：绿色虚线框
             rect = np.array(tcp_box[i] + [tcp_box[i][0]])  # 闭合多边形
-            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=2, label='TCP Box')
+            ax.plot(rect[:, 0], rect[:, 1], 'g--', linewidth=0.5, label='TCP Box')
 
 
             ax.set_xlim(min_xy[0], max_xy[0])
@@ -2250,9 +2256,8 @@ for iii in range(len(paired_planes)):
                 all_xy.extend(list(r))
 
         all_xy = np.asarray(all_xy) if len(all_xy) else np.zeros((1,2))
-        pad = 0.02
-        min_xy = all_xy.min(axis=0) - pad
-        max_xy = all_xy.max(axis=0) + pad
+        min_xy = all_xy.min(axis=0) - plt_graphic_space
+        max_xy = all_xy.max(axis=0) + plt_graphic_space
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.set_title("All Feasible TCP and TCP Box")
