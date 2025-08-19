@@ -1,0 +1,48 @@
+*.log
+*.json
+*.png
+*.lock
+*.toml
+*.zip
+*.python-version
+
+
+Logs/
+Scrennshots/
+YCB_Dataset/
+01_project/remove_screenshot.py
+main.py
+01_project/test_normals.py
+01_project/tttt.py
+01_project/~$bo4Space_I4S.docx
+01_project/~WRL1299.tmp
+01_project/Robo4Space_I4S.docx
+01_project/tttt.py
+profile_results.txt
+01_project/profile_template.py
+profile_results_infeasible_planes.txt
+profile_results_no_normal.txt
+profile_results_whole_object_no_plot.txt
+profile_results_whole_object.txt
+profile_results_with_normal.txt
+01_project/test_pcd2stl.py
+profile_results_whole_object_no_plot_unregularbox.txt
+profile_results_whole_object_no_plot_bumped_cube_100k.txt
+01_project/delect.py
+out/
+01_project/load_pcd.py
+01_project/test_.py
+plane_indices.npy
+plane_indices_2.npy
+01_project/with part pts and assemble pts.py
+01_project/image
+Object/Verification_examples/ply CubeSat/V3/extracted_object
+Object/Verification_examples/ply CubeSat/V3/out
+Object/Verification_examples/ply CubeSat/V3/out1
+proj_pcd_p2.pcd
+proj_pcd_p3.pcd
+proj_pcd_p4.pcd
+proj_pcd_p5.pcd
+proj_pcd_p3a.pcd
+proj_pcd_p3b.pcd
+01_project/gripper_parameter_list.docx
